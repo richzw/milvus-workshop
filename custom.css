@@ -1,0 +1,251 @@
+/* Apple-style Minimal Design */
+
+:root {
+  --bg: #ffffff;
+  --bg-secondary: #f5f5f7;
+  --text: #1d1d1f;
+  --text-secondary: #86868b;
+  --border: #d2d2d7;
+  --accent: #0071e3;
+  --code-bg: #1d1d1f;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.47059;
+  font-size: 17px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Container */
+#notebook-container, .jp-Notebook {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 80px 22px;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Cells */
+.cell, .jp-Cell {
+  background: transparent;
+  border: none;
+  margin: 32px 0;
+  padding: 0;
+  box-shadow: none;
+}
+
+/* Markdown cells */
+.text_cell, .jp-MarkdownCell {
+  padding: 0;
+}
+
+/* Code cells */
+.code_cell, .jp-CodeCell {
+  background: transparent;
+}
+
+/* Input area */
+.input_area, .jp-InputArea {
+  background: var(--code-bg);
+  border-radius: 12px;
+  border: none;
+  overflow: hidden;
+}
+
+.input_area pre, .jp-InputArea pre {
+  background: transparent;
+  color: #f5f5f7;
+  padding: 20px 24px;
+  margin: 0;
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* Output area */
+.output_area, .jp-OutputArea {
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  margin-top: 12px;
+  padding: 20px 24px;
+  border: none;
+}
+
+.output_area pre, .jp-OutputArea pre {
+  background: transparent;
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, monospace;
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* Prompt - hide for cleaner look */
+.prompt, .jp-InputPrompt, .jp-OutputPrompt {
+  display: none;
+}
+
+/* Headers */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: -0.022em;
+}
+
+h1 {
+  font-size: 48px;
+  line-height: 1.08;
+  font-weight: 700;
+  letter-spacing: -0.003em;
+  margin: 0 0 24px 0;
+}
+
+h2 {
+  font-size: 32px;
+  line-height: 1.125;
+  margin: 56px 0 16px 0;
+}
+
+h3 {
+  font-size: 24px;
+  line-height: 1.17;
+  margin: 40px 0 12px 0;
+}
+
+h4 {
+  font-size: 19px;
+  line-height: 1.21;
+  margin: 32px 0 8px 0;
+}
+
+p {
+  margin: 16px 0;
+}
+
+/* Links */
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Code inline */
+code {
+  background: var(--bg-secondary);
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, monospace;
+  font-size: 0.88em;
+  color: var(--text);
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+}
+
+/* Tables */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 24px 0;
+  font-size: 15px;
+}
+
+th, td {
+  padding: 14px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+/* Images */
+img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+}
+
+/* Blockquotes */
+blockquote {
+  border-left: 3px solid var(--border);
+  margin: 24px 0;
+  padding: 0 0 0 20px;
+  color: var(--text-secondary);
+}
+
+/* Lists */
+ul, ol {
+  padding-left: 28px;
+  margin: 16px 0;
+}
+
+li {
+  margin: 8px 0;
+}
+
+
+
+/* Scrollbar - minimal */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+/* Selection */
+::selection {
+  background: rgba(0, 113, 227, 0.2);
+}
+
+/* Responsive */
+@media (max-width: 734px) {
+  body {
+    font-size: 15px;
+  }
+  
+  #notebook-container, .jp-Notebook {
+    padding: 60px 16px;
+  }
+  
+  h1 {
+    font-size: 32px;
+  }
+  
+  h2 {
+    font-size: 24px;
+  }
+  
+  .back-btn {
+    top: 16px;
+    left: 16px;
+    font-size: 15px;
+  }
+}

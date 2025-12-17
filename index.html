@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Milvus Workshop</title>
+  <style>
+    :root { --text: #1d1d1f; --text-secondary: #86868b; --bg: #fff; --bg-secondary: #f5f5f7; --accent: #0071e3; --border: #d2d2d7; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+    .container { max-width: 980px; margin: 0 auto; padding: 0 22px; }
+    header { text-align: center; padding: 80px 22px 60px; }
+    header img { width: 64px; margin-bottom: 24px; }
+    header h1 { font-size: 56px; font-weight: 700; letter-spacing: -0.005em; line-height: 1.07; margin-bottom: 12px; }
+    header p { font-size: 21px; color: var(--text-secondary); font-weight: 400; }
+    .chapters { padding-bottom: 80px; }
+    .chapter { margin-bottom: 48px; }
+    .chapter h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+    .lessons { display: flex; flex-direction: column; gap: 1px; background: var(--border); border-radius: 12px; overflow: hidden; }
+    .lesson { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: var(--bg); text-decoration: none; color: var(--text); transition: background 0.2s; }
+    .lesson:hover { background: var(--bg-secondary); }
+    .lesson-title { font-size: 17px; font-weight: 400; }
+    .lang-tag { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 12px; }
+    .lang-zh { background: #fef3e2; color: #b25000; }
+    .lang-en { background: #e8f4fd; color: #0066cc; }
+    .arrow { color: var(--text-secondary); font-size: 20px; margin-left: 12px; }
+    footer { text-align: center; padding: 40px 22px; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 14px; }
+    footer a { color: var(--accent); text-decoration: none; }
+    @media (max-width: 734px) {
+      header h1 { font-size: 32px; }
+      header p { font-size: 17px; }
+      .chapter h2 { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="ch4/images/milvus-logo.svg" alt="Milvus" onerror="this.style.display='none'">
+    <h1>Milvus Workshop</h1>
+    <p>从入门到应用的向量数据库完整教程</p>
+  </header>
+  <div class="container">
+    <div class="chapters">
+      <div class="chapter">
+        <h2>Part 1 · 探索 Milvus</h2>
+        <div class="lessons">
+          <a href="ch1/ch1_1.html" class="lesson"><span class="lesson-title">1.1 Milvus 向量数据库概述</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch1/ch1_1_en.html" class="lesson"><span class="lesson-title">1.1 Overview of Milvus Vector Database</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch1/ch1_2.html" class="lesson"><span class="lesson-title">1.2 Milvus 安装实践</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch1/ch1_2_en.html" class="lesson"><span class="lesson-title">1.2 Hands-on Milvus Installation</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch1/ch1_3.html" class="lesson"><span class="lesson-title">1.3 Milvus 核心架构与组件解析</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch1/ch1_3_en.html" class="lesson"><span class="lesson-title">1.3 Analysis of Milvus Core Architecture</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+        </div>
+      </div>
+      <div class="chapter">
+        <h2>Part 2 · 基础操作</h2>
+        <div class="lessons">
+          <a href="ch2/ch2_1.html" class="lesson"><span class="lesson-title">2.1 连接 Milvus 与 Collection 管理</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch2/ch2_1_en.html" class="lesson"><span class="lesson-title">2.1 Connecting to Milvus and Managing Collections</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch2/ch2_2.html" class="lesson"><span class="lesson-title">2.2 数据插入与管理</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch2/ch2_2_en.html" class="lesson"><span class="lesson-title">2.2 Data Insertion and Management</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch2/ch2_3.html" class="lesson"><span class="lesson-title">2.3 索引构建与管理</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch2/ch2_3_en.html" class="lesson"><span class="lesson-title">2.3 Building and Managing Indexes</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch2/ch2_4.html" class="lesson"><span class="lesson-title">2.4 向量搜索、查询与混合搜索</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch2/ch2_4_en.html" class="lesson"><span class="lesson-title">2.4 Vector Similarity Search, Query, and Hybrid Search</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+        </div>
+      </div>
+      <div class="chapter">
+        <h2>Part 3 · 应用实践</h2>
+        <div class="lessons">
+          <a href="ch3/ch3_1.html" class="lesson"><span class="lesson-title">3.1 Milvus 在图像搜索中的应用</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch3/ch3_1_en.html" class="lesson"><span class="lesson-title">3.1 Applying Milvus in Image Search</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch3/ch3_2.html" class="lesson"><span class="lesson-title">3.2 Milvus 在 RAG 中的应用</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch3/ch3_2_en.html" class="lesson"><span class="lesson-title">3.2 Applying Milvus in RAG</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch3/ch3_3.html" class="lesson"><span class="lesson-title">3.3 Milvus 在 AI Agent 中的应用</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch3/ch3_3_en.html" class="lesson"><span class="lesson-title">3.3 Applying Milvus in AI Agents</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch3/ch3_4.html" class="lesson"><span class="lesson-title">3.4 Milvus 生态功能概览</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch3/ch3_4_en.html" class="lesson"><span class="lesson-title">3.4 Overview of Milvus Ecosystem Features</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+        </div>
+      </div>
+      <div class="chapter">
+        <h2>Part 4 · 进阶实践</h2>
+        <div class="lessons">
+          <a href="ch4/ch4_1.html" class="lesson"><span class="lesson-title">4.1 Milvus 可观测性与运维实践</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch4/ch4_1_en.html" class="lesson"><span class="lesson-title">4.1 Hands-on Milvus Observability and Operations</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch4/ch4_2.html" class="lesson"><span class="lesson-title">4.2 VectorDBBench 性能测试实践</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch4/ch4_2_en.html" class="lesson"><span class="lesson-title">4.2 Hands-on Benchmarking with VectorDBBench</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+          <a href="ch4/ch4_3.html" class="lesson"><span class="lesson-title">4.3 Milvus 性能调优</span><span><span class="lang-tag lang-zh">中文</span><span class="arrow">›</span></span></a>
+          <a href="ch4/ch4_3_en.html" class="lesson"><span class="lesson-title">4.3 Milvus Performance Tuning</span><span><span class="lang-tag lang-en">EN</span><span class="arrow">›</span></span></a>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer>Built with <a href="https://milvus.io" target="_blank">Milvus</a></footer>
+</body>
+</html>
