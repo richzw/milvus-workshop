@@ -63,7 +63,8 @@ Following the principle of separating the data plane and control plane, Milvus c
 - Supports 100k Collections;
 
 
-![image.png](ch1_3_en_files/83a3c672-0129-4876-9e01-8209d9c17f64.png)
+
+![image.png](ch1_3_en_files/e36b20fb-395d-4b74-8276-cf5df78c44fa.png)
 
 
 ```python
