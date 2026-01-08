@@ -68,6 +68,14 @@
         *   **Index Node:** 索引构建节点，执行索引构建任务。
     *   Milvus 2.6 在架构中的优化 
         *   **Streaming Node:** 实时数据流处理。
+
+*   [**1.4 Milvus 访问控制 RBAC**](./ch1/ch1_4.ipynb)
+    *   为什么使用 Milvus 时访问控制很重要？
+    *   Milvus 中的 RBAC 是什么？
+    *   RBAC 在 Milvus 中的工作原理
+    *   如何在 Milvus 中通过 RBAC 配置访问控制
+    *   示例：Milvus 驱动的 RAG 系统的访问控制设计
+    *   快速提示：如何在生产中安全操作访问控制
     *   **Q&A & 小结**
 
 ---

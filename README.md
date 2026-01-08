@@ -66,6 +66,14 @@
         *   **Index Node:** Index-building node, executes index-building tasks.
     *   Architectural Optimizations in Milvus 2.6
         *   **Streaming Node:** Real-time data stream processing.
+
+*   [**1.4 Milvus Access Control RBAC**](./ch1/ch1_4_en.ipynb)
+    *   Why is access control important when using Milvus?
+    *   What is RBAC in Milvus?
+    *   How RBAC works in Milvus.
+    *   How to configure access control via RBAC in Milvus.
+    *   Example: Access control design for a Milvus-driven RAG system.
+    *   Quick tips: How to operate access control securely in production.
     *   **Q&A & Summary**
 
 ---
