@@ -1,0 +1,18 @@
+apiVersion: milvus.io/v1beta1
+kind: Milvus
+metadata:
+  name: target-cluster
+  namespace: milvus
+  labels:
+    app: milvus
+    role: target
+spec:
+  mode: cluster
+
+  components:
+    image: milvusdb/milvus:v2.6.6
+
+  dependencies:
+    msgStreamType: woodpecker
+
+# 注意：Target 集群不需要配置 cdc 组件。CDC Node 部署在 Source 侧，负责消费 Source WAL 并转发到 Target。

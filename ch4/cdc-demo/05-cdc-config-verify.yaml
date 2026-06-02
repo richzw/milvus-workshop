@@ -1,0 +1,387 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: milvus-cdc-config-verify-script
+  namespace: milvus
+data:
+  cdc_config_verify.py: |
+    import os
+    import time
+    import math
+    import traceback
+    from pymilvus import MilvusClient, DataType
+
+    SOURCE_CLUSTER_ID = os.getenv("SOURCE_CLUSTER_ID", "source-cluster")
+    TARGET_CLUSTER_ID = os.getenv("TARGET_CLUSTER_ID", "target-cluster")
+
+    SOURCE_CLUSTER_ADDR = os.getenv(
+        "SOURCE_CLUSTER_ADDR",
+        "http://source-cluster-milvus.milvus.svc.cluster.local:19530",
+    )
+    TARGET_CLUSTER_ADDR = os.getenv(
+        "TARGET_CLUSTER_ADDR",
+        "http://target-cluster-milvus.milvus.svc.cluster.local:19530",
+    )
+
+    SOURCE_CLUSTER_TOKEN = os.getenv("SOURCE_CLUSTER_TOKEN", "root:Milvus")
+    TARGET_CLUSTER_TOKEN = os.getenv("TARGET_CLUSTER_TOKEN", "root:Milvus")
+
+    # 默认 Milvus dml pchannel 数为 16。
+    # 如果你修改过 Milvus 内部 channel 配置，这里必须改成实际值。
+    PCHANNEL_NUM = int(os.getenv("PCHANNEL_NUM", "16"))
+
+    VECTOR_DIM = int(os.getenv("VECTOR_DIM", "4"))
+    ROW_COUNT = int(os.getenv("ROW_COUNT", "20"))
+
+    VERIFY_TIMEOUT_SECONDS = int(os.getenv("VERIFY_TIMEOUT_SECONDS", "180"))
+    VERIFY_INTERVAL_SECONDS = int(os.getenv("VERIFY_INTERVAL_SECONDS", "3"))
+
+    RUN_ID = str(int(time.time()))
+    COLLECTION_NAME = os.getenv("COLLECTION_NAME", f"cdc_verify_{RUN_ID}")
+
+    def build_pchannels(cluster_id: str, num: int):
+        return [f"{cluster_id}-rootcoord-dml_{i}" for i in range(num)]
+
+    def build_replicate_config():
+        source_pchannels = build_pchannels(SOURCE_CLUSTER_ID, PCHANNEL_NUM)
+        target_pchannels = build_pchannels(TARGET_CLUSTER_ID, PCHANNEL_NUM)
+
+        config = {
+            "clusters": [
+                {
+                    "cluster_id": SOURCE_CLUSTER_ID,
+                    "connection_param": {
+                        "uri": SOURCE_CLUSTER_ADDR,
+                        "token": SOURCE_CLUSTER_TOKEN,
+                    },
+                    "pchannels": source_pchannels,
+                },
+                {
+                    "cluster_id": TARGET_CLUSTER_ID,
+                    "connection_param": {
+                        "uri": TARGET_CLUSTER_ADDR,
+                        "token": TARGET_CLUSTER_TOKEN,
+                    },
+                    "pchannels": target_pchannels,
+                },
+            ],
+            "cross_cluster_topology": [
+                {
+                    "source_cluster_id": SOURCE_CLUSTER_ID,
+                    "target_cluster_id": TARGET_CLUSTER_ID,
+                }
+            ],
+        }
+        return config
+
+    def normalize(vec):
+        s = math.sqrt(sum(x * x for x in vec))
+        return [x / s for x in vec]
+
+    def make_vector(i: int):
+        # 构造稳定、可搜索的向量
+        base = [0.0] * VECTOR_DIM
+        base[i % VECTOR_DIM] = 1.0
+        for j in range(VECTOR_DIM):
+            base[j] += i * 0.001
+        return normalize(base)
+
+    def create_collection(client: MilvusClient, collection_name: str):
+        print(f"[Source] Creating collection: {collection_name}")
+
+        schema = client.create_schema(
+            auto_id=False,
+            enable_dynamic_field=False,
+        )
+
+        schema.add_field(
+            field_name="id",
+            datatype=DataType.INT64,
+            is_primary=True,
+        )
+        schema.add_field(
+            field_name="vector",
+            datatype=DataType.FLOAT_VECTOR,
+            dim=VECTOR_DIM,
+        )
+        schema.add_field(
+            field_name="tag",
+            datatype=DataType.VARCHAR,
+            max_length=128,
+        )
+
+        index_params = client.prepare_index_params()
+        index_params.add_index(
+            field_name="vector",
+            index_type="AUTOINDEX",
+            metric_type="COSINE",
+        )
+
+        client.create_collection(
+            collection_name=collection_name,
+            schema=schema,
+            index_params=index_params,
+        )
+
+    def insert_data(client: MilvusClient, collection_name: str):
+        print(f"[Source] Inserting {ROW_COUNT} rows")
+
+        rows = []
+        for i in range(ROW_COUNT):
+            rows.append(
+                {
+                    "id": i,
+                    "vector": make_vector(i),
+                    "tag": f"cdc-{RUN_ID}-{i}",
+                }
+            )
+
+        result = client.insert(
+            collection_name=collection_name,
+            data=rows,
+        )
+        print(f"[Source] Insert result: {result}")
+
+        print("[Source] Flushing")
+        client.flush(collection_name=collection_name)
+
+    def load_collection(client: MilvusClient, collection_name: str, cluster_name: str):
+        print(f"[{cluster_name}] Loading collection: {collection_name}")
+        client.load_collection(collection_name=collection_name)
+
+    def query_all(client: MilvusClient, collection_name: str, cluster_name: str):
+        print(f"[{cluster_name}] Query all rows")
+        rows = client.query(
+            collection_name=collection_name,
+            filter="id >= 0",
+            output_fields=["id", "tag"],
+            limit=ROW_COUNT,
+        )
+        rows = sorted(rows, key=lambda x: x["id"])
+        print(f"[{cluster_name}] Query result count: {len(rows)}")
+        print(f"[{cluster_name}] Query sample: {rows[:5]}")
+        return rows
+
+    def search_topk(client: MilvusClient, collection_name: str, cluster_name: str):
+        print(f"[{cluster_name}] Search topK")
+        result = client.search(
+            collection_name=collection_name,
+            data=[make_vector(0)],
+            anns_field="vector",
+            search_params={
+                "metric_type": "COSINE",
+                "params": {},
+            },
+            limit=5,
+            output_fields=["id", "tag"],
+        )
+        print(f"[{cluster_name}] Search result: {result}")
+        return result
+
+    def wait_target_synced(target_client: MilvusClient, collection_name: str):
+        print(f"[Target] Waiting CDC sync, timeout={VERIFY_TIMEOUT_SECONDS}s")
+
+        deadline = time.time() + VERIFY_TIMEOUT_SECONDS
+        last_error = None
+
+        while time.time() < deadline:
+            try:
+                if not target_client.has_collection(collection_name):
+                    print(f"[Target] Collection not found yet: {collection_name}")
+                    time.sleep(VERIFY_INTERVAL_SECONDS)
+                    continue
+
+                # 注意：Target 是 CDC 备集群（secondary），禁止任何 DDL/DCL。
+                # 不能调用 load_collection（会报 "cluster is not primary"）。
+                # load 状态由 Source 通过 CDC 复制过来，这里只做 query 并重试。
+                rows = target_client.query(
+                    collection_name=collection_name,
+                    filter="id >= 0",
+                    output_fields=["id", "tag"],
+                    limit=ROW_COUNT,
+                )
+
+                print(f"[Target] Current synced rows: {len(rows)}/{ROW_COUNT}")
+
+                if len(rows) >= ROW_COUNT:
+                    rows = sorted(rows, key=lambda x: x["id"])
+                    return rows
+
+            except Exception as e:
+                last_error = e
+                print(f"[Target] Not ready yet: {repr(e)}")
+
+            time.sleep(VERIFY_INTERVAL_SECONDS)
+
+        raise TimeoutError(
+            f"Target cluster did not sync expected rows within "
+            f"{VERIFY_TIMEOUT_SECONDS}s. Last error: {repr(last_error)}"
+        )
+
+    def configure_cdc():
+        config = build_replicate_config()
+
+        print("========== CDC Replicate Configuration ==========")
+        print(config)
+
+        source_client = MilvusClient(
+            uri=SOURCE_CLUSTER_ADDR,
+            token=SOURCE_CLUSTER_TOKEN,
+        )
+        target_client = MilvusClient(
+            uri=TARGET_CLUSTER_ADDR,
+            token=TARGET_CLUSTER_TOKEN,
+        )
+
+        try:
+            print("[Source] update_replicate_configuration")
+            source_client.update_replicate_configuration(**config)
+
+            print("[Target] update_replicate_configuration")
+            target_client.update_replicate_configuration(**config)
+
+            print("CDC replicate configuration updated successfully.")
+        finally:
+            source_client.close()
+            target_client.close()
+
+    def verify_cdc():
+        source_client = MilvusClient(
+            uri=SOURCE_CLUSTER_ADDR,
+            token=SOURCE_CLUSTER_TOKEN,
+        )
+        target_client = MilvusClient(
+            uri=TARGET_CLUSTER_ADDR,
+            token=TARGET_CLUSTER_TOKEN,
+        )
+
+        try:
+            print("========== Source Create Collection ==========")
+            create_collection(source_client, COLLECTION_NAME)
+
+            print("========== Source Insert Data ==========")
+            insert_data(source_client, COLLECTION_NAME)
+
+            print("========== Source Load / Query / Search ==========")
+            load_collection(source_client, COLLECTION_NAME, "Source")
+            source_rows = query_all(source_client, COLLECTION_NAME, "Source")
+            source_search = search_topk(source_client, COLLECTION_NAME, "Source")
+
+            if len(source_rows) != ROW_COUNT:
+                raise RuntimeError(
+                    f"Source row count mismatch: expected={ROW_COUNT}, actual={len(source_rows)}"
+                )
+
+            print("========== Target Wait CDC Sync ==========")
+            target_rows = wait_target_synced(target_client, COLLECTION_NAME)
+
+            print("========== Target Query / Search ==========")
+            print(f"[Target] Query result count: {len(target_rows)}")
+            print(f"[Target] Query sample: {target_rows[:5]}")
+            target_search = search_topk(target_client, COLLECTION_NAME, "Target")
+
+            source_ids = [r["id"] for r in source_rows]
+            target_ids = [r["id"] for r in target_rows]
+
+            if source_ids != target_ids:
+                raise RuntimeError(
+                    f"Source/Target ids mismatch. source={source_ids}, target={target_ids}"
+                )
+
+            print("========== CDC VERIFY PASSED ==========")
+            print(f"Collection: {COLLECTION_NAME}")
+            print(f"Source rows: {len(source_rows)}")
+            print(f"Target rows: {len(target_rows)}")
+            print(f"Source search: {source_search}")
+            print(f"Target search: {target_search}")
+
+        finally:
+            source_client.close()
+            target_client.close()
+
+    def main():
+        print("========== Milvus CDC Config And Verify ==========")
+        print(f"SOURCE_CLUSTER_ID   = {SOURCE_CLUSTER_ID}")
+        print(f"TARGET_CLUSTER_ID   = {TARGET_CLUSTER_ID}")
+        print(f"SOURCE_CLUSTER_ADDR = {SOURCE_CLUSTER_ADDR}")
+        print(f"TARGET_CLUSTER_ADDR = {TARGET_CLUSTER_ADDR}")
+        print(f"PCHANNEL_NUM        = {PCHANNEL_NUM}")
+        print(f"COLLECTION_NAME     = {COLLECTION_NAME}")
+
+        configure_cdc()
+        verify_cdc()
+
+    if __name__ == "__main__":
+        try:
+            main()
+        except Exception:
+            traceback.print_exc()
+            raise
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: milvus-cdc-config-verify
+  namespace: milvus
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: milvus-cdc-config-verify
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: cdc-config-verify
+          image: python:3.11-slim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SOURCE_CLUSTER_ID
+              value: "source-cluster"
+            - name: TARGET_CLUSTER_ID
+              value: "target-cluster"
+
+            # 注意：这里必须使用 CDC Pod 可以访问到的地址。
+            # 同 namespace 下也可以写成：
+            # http://source-cluster-milvus:19530
+            # http://target-cluster-milvus:19530
+            - name: SOURCE_CLUSTER_ADDR
+              value: "http://source-cluster-milvus.milvus.svc.cluster.local:19530"
+            - name: TARGET_CLUSTER_ADDR
+              value: "http://target-cluster-milvus.milvus.svc.cluster.local:19530"
+
+            - name: SOURCE_CLUSTER_TOKEN
+              value: "root:Milvus"
+            - name: TARGET_CLUSTER_TOKEN
+              value: "root:Milvus"
+
+            # 默认 16。如果你的 Milvus pchannel 数调整过，必须同步修改。
+            - name: PCHANNEL_NUM
+              value: "16"
+
+            - name: VECTOR_DIM
+              value: "4"
+            - name: ROW_COUNT
+              value: "20"
+            - name: VERIFY_TIMEOUT_SECONDS
+              value: "180"
+            - name: VERIFY_INTERVAL_SECONDS
+              value: "3"
+
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              pip install --no-cache-dir "pymilvus>=2.6.6"
+              python /scripts/cdc_config_verify.py
+
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+
+      volumes:
+        - name: script
+          configMap:
+            name: milvus-cdc-config-verify-script

@@ -1,0 +1,23 @@
+apiVersion: milvus.io/v1beta1
+kind: Milvus
+metadata:
+  name: source-cluster
+  namespace: milvus
+  labels:
+    app: milvus
+    role: source
+spec:
+  mode: cluster
+
+  components:
+    # CDC 从 Milvus 2.6.6 开始支持
+    image: milvusdb/milvus:v2.6.6
+
+    # Source 集群需要启用 CDC 组件
+    cdc:
+      # 当前 Milvus CDC 仅支持单副本
+      replicas: 1
+
+  dependencies:
+    # Milvus 2.6 CDC 示例使用 woodpecker
+    msgStreamType: woodpecker
