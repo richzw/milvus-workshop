@@ -205,4 +205,5 @@
         *   Parameter tuning related to vector indexes.
 *   [**4.4 Milvus Upgrade**](./ch4/ch4_4_en.ipynb)
     *   **Milvus 2.5 → 2.6 upgrade**
+*   [**4.5 Milvus CDC**](./ch4/ch4_5_en.ipynb)
 

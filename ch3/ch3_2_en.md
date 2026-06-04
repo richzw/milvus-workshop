@@ -619,6 +619,8 @@ Chunk size refers to the length of dividing documents or text into small blocks 
   - **Fixed-size chunking**
     - Fixed-size chunking is a simple technique that divides text into blocks of predetermined size without considering content structure. While this method is cost-effective, it lacks context awareness. This can be improved by using overlapping blocks, allowing adjacent blocks to share some content.
     - ![image.png](ch3_2_en_files/5f844030-fdcf-44e7-84e7-028c99460a24.png)
+  - **𝗦𝗹𝗶𝗱𝗶𝗻𝗴-𝘄𝗶𝗻𝗱𝗼𝘄 𝗰𝗵𝘂𝗻𝗸𝗶𝗻𝗴**
+    - 𝗦𝗹𝗶𝗱𝗶𝗻𝗴-𝘄𝗶𝗻𝗱𝗼𝘄 𝗰𝗵𝘂𝗻𝗸𝗶𝗻𝗴 (𝟱𝟬–𝟭𝟬𝟬 𝘁𝗼𝗸𝗲𝗻𝘀 𝗼𝗳 𝗼𝘃𝗲𝗿𝗹𝗮𝗽) 𝘀𝘁𝗼𝗽𝘀 𝗮𝗻𝘀𝘄𝗲𝗿𝘀 𝗳𝗿𝗼𝗺 𝗴𝗲𝘁𝘁𝗶𝗻𝗴 𝗰𝘂𝘁 𝗺𝗶𝗱-𝘀𝗲𝗻𝘁𝗲𝗻𝗰𝗲, 𝗯𝘂𝘁 𝗶𝘁 𝗰𝗿𝗲𝗮𝘁𝗲𝘀 𝗱𝘂𝗽𝗹𝗶𝗰𝗮𝘁𝗲𝘀. The same passage shows up in three overlapping chunks, all three score high, and they fill your top results — leaving no room for other relevant content.
   - **Recursive chunking**
     - Recursive chunking provides greater flexibility by first splitting text using primary separators (such as paragraphs), then applying secondary separators (such as sentences) if blocks are still too large. This technique respects document structure and adapts well to various use cases.
     - ![image.png](ch3_2_en_files/6d87791e-49e6-46d3-aa4b-eff1fe4da49a.png)
@@ -636,6 +638,11 @@ Chunk size refers to the length of dividing documents or text into small blocks 
   - In practical applications, it is recommended to find the optimal balance through preprocessing and testing different chunk sizes (e.g., from 128 to 1024 tokens).
   - Using overlap (such as 10% or 25%) can reduce information loss and improve retrieval continuity. For example, Recall@50 with 10% overlap is 43.1, with 25% overlap is 43.9.
   - For semantically ambiguous chunks, it is recommended to combine with subsequent rerank steps for further optimization.
+
+#### 5 **𝗪𝗵𝗮𝘁'𝘀 𝘄𝗼𝗿𝗸𝗲𝗱 𝗳𝗼𝗿 𝘂𝘀**
+  - 𝗧𝗲𝗰𝗵𝗻𝗶𝗰𝗮𝗹 𝗱𝗼𝗰𝘀: semantic chunking, with sliding-window as a fallback
+  - 𝗖𝗵𝗮𝘁 𝗹𝗼𝗴𝘀 𝗮𝗻𝗱 𝘁𝗶𝗰𝗸𝗲𝘁𝘀: fixed-length, with a larger overlap
+  - 𝗔𝗣𝗜 𝗱𝗼𝗰𝘀 𝗮𝗻𝗱 𝗰𝗼𝗻𝗳𝗶𝗴 files: references: split by section
 
 ### Embedding Model Selection
 The embedding model is responsible for converting text into vector representations and is the core component of the RAG retrieval stage. Choosing the appropriate model directly affects retrieval accuracy and efficiency. Here are key points about embedding model selection:

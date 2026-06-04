@@ -211,6 +211,7 @@
         *   常见慢查询场景分析
 *   [**4.4 Milvus升级**](./ch4/ch4_4.ipynb)
     *   **Milvus 2.5 → 2.6 升级**
+*   [**4.5 Milvus CDC**](./ch4/ch4_5.ipynb)
 
 ----
 
