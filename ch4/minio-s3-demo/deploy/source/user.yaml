@@ -1,0 +1,11 @@
+# 源 Milvus 对象存储 = 容器内 MinIO。bucketName/rootPath 必须与 env.sh 一致。
+minio:
+  address: minio
+  port: 9000
+  accessKeyID: minioadmin
+  secretAccessKey: minioadmin
+  useSSL: false
+  useIAM: false
+  cloudProvider: minio
+  bucketName: milvus-bucket   # = env.sh MINIO_BUCKET
+  rootPath: file              # = env.sh MINIO_ROOTPATH
