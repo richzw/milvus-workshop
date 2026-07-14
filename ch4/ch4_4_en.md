@@ -402,4 +402,43 @@ helm upgrade my-release zilliztech/milvus \
 - standalone + Helm: `upgrade_milvus_standalone-helm.md`
 - https://milvus.io/blog/how-to-safely-upgrade-from-milvu-2-5-x-to-milvus-2-6-x.md
 
+### MinHash LSH
+
+Duplicate text in your LLM pre-training corpus drives up training cost and reweights parts of the training data. 𝗠𝗶𝗻𝗛𝗮𝘀𝗵 𝗟𝗦𝗛 𝗺𝗮𝗸𝗲𝘀 𝘀𝗰𝗮𝗹𝗮𝗯𝗹𝗲 𝗱𝗲𝗱𝘂𝗽 𝗽𝗿𝗮𝗰𝘁𝗶𝗰𝗮𝗹, 𝗮𝗻𝗱 𝗠𝗶𝗹𝘃𝘂𝘀 𝟮.𝟲 𝗮𝗱𝗱𝗲𝗱 𝗶𝘁 𝗮𝘀 𝗮 𝗻𝗮𝘁𝗶𝘃𝗲 𝗶𝗻𝗱𝗲𝘅 𝘁𝘆𝗽𝗲.
+
+The usual dedup options break down quickly:
+- 𝗘𝘅𝗮𝗰𝘁 𝗺𝗮𝘁𝗰𝗵𝗶𝗻𝗴 is too strict for text dedup. Near-identical documents often differ by boilerplate, formatting, punctuation, or minor edits, and exact comparison misses all of them.
+- 𝗣𝗮𝗶𝗿𝘄𝗶𝘀𝗲 𝗰𝗼𝗺𝗽𝗮𝗿𝗶𝘀𝗼𝗻 catches more, but the computation explodes with data volume. At millions of documents, it's infeasible.
+
+𝗠𝗶𝗻𝗛𝗮𝘀𝗵 𝗟𝗦𝗛 works well as a coarse-pass filter. It's approximate deduplication with a tunable recall/precision tradeoff, fast enough to run inline during ingestion to check candidates before storing redundant content.
+
+𝗠𝗶𝗹𝘃𝘂𝘀 𝟮.𝟲 𝗮𝗱𝗱𝗲𝗱 𝗻𝗮𝘁𝗶𝘃𝗲 𝗠𝗶𝗻𝗛𝗮𝘀𝗵 𝗟𝗦𝗛 𝗶𝗻𝗱𝗲𝘅𝗶𝗻𝗴 𝘄𝗶𝘁𝗵 𝗮 𝗱𝗲𝗱𝗶𝗰𝗮𝘁𝗲𝗱 𝗺𝗲𝘁𝗿𝗶𝗰 𝘁𝘆𝗽𝗲, 𝗹𝗲𝘁𝘁𝗶𝗻𝗴 𝘁𝗲𝗮𝗺𝘀 𝗶𝗻𝗱𝗲𝘅 𝗮𝗻𝗱 𝘀𝗲𝗮𝗿𝗰𝗵 𝗠𝗶𝗻𝗛𝗮𝘀𝗵 𝘀𝗶𝗴𝗻𝗮𝘁𝘂𝗿𝗲𝘀 𝗳𝗼𝗿 𝗱𝘂𝗽𝗹𝗶𝗰𝗮𝘁𝗲 𝗮𝗻𝗱 𝗻𝗲𝗮𝗿-𝗱𝘂𝗽𝗹𝗶𝗰𝗮𝘁𝗲 𝗱𝗲𝘁𝗲𝗰𝘁𝗶𝗼𝗻 𝗮𝘁 𝗰𝗼𝗹𝗹𝗲𝗰𝘁𝗶𝗼𝗻 𝘀𝗰𝗮𝗹𝗲.
+
+𝗪𝗵𝗲𝗿𝗲 𝘁𝗵𝗶𝘀 𝗵𝗲𝗹𝗽𝘀:
+- 𝗟𝗟𝗠 𝘁𝗿𝗮𝗶𝗻𝗶𝗻𝗴 𝗱𝗮𝘁𝗮 𝗰𝗹𝗲𝗮𝗻𝗶𝗻𝗴: removing duplicate text from crawled corpora before training begins
+- 𝗟𝗮𝗿𝗴𝗲-𝘀𝗰𝗮𝗹𝗲 𝗽𝗹𝗮𝗴𝗶𝗮𝗿𝗶𝘀𝗺 𝘀𝗰𝗿𝗲𝗲𝗻𝗶𝗻𝗴: detecting substantial text overlap in academic or content pipelines as a coarse-pass filter
+
+𝗟𝗶𝗺𝗶𝘁𝗮𝘁𝗶𝗼𝗻: MinHash operates on token-set overlap, not word order or semantics. It catches verbatim and near-verbatim duplication but won't flag paraphrases. For semantic or paraphrase-level deduplication, teams layer in SimHash, TF-IDF with cosine similarity, or embedding-based methods.
+
+In Milvus, MinHash signatures are stored as 𝗯𝗶𝗻𝗮𝗿𝘆 𝘃𝗲𝗰𝘁𝗼𝗿𝘀 approximating 𝗝𝗮𝗰𝗰𝗮𝗿𝗱 𝘀𝗶𝗺𝗶𝗹𝗮𝗿𝗶𝘁𝘆 between document token sets. Standard metrics like Jaccard, L2, or cosine can't be applied directly to these signatures, so Milvus introduced a dedicated metric called 𝗠𝗛𝗝𝗔𝗖𝗖𝗔𝗥𝗗. For higher accuracy, Milvus also supports a refined search mode that recomputes exact Jaccard using stored token sets, reducing false positives.
+
+The dedup pipeline:
+- 𝗦𝗲𝘁𝘂𝗽: Create a collection with a 𝗠𝗜𝗡𝗛𝗔𝗦𝗛_𝗟𝗦𝗛 index, using the MHJACCARD metric and configurable LSH parameters (e.g., band count)
+- 𝗦𝗶𝗴𝗻𝗮𝘁𝘂𝗿𝗲 𝗴𝗲𝗻𝗲𝗿𝗮𝘁𝗶𝗼𝗻: For each incoming document, tokenize or shingle it and generate a MinHash signature (e.g., using datasketch)
+- 𝗗𝘂𝗽𝗹𝗶𝗰𝗮𝘁𝗲 𝗰𝗵𝗲𝗰𝗸: Search the collection with the new signature to find existing near-duplicates
+- 𝗜𝗻𝘀𝗲𝗿𝘁: Store only documents that don't exceed your similarity threshold, alongside metadata
+
+![image.png](ch4_4_en_files/0f78514e-712e-4e0b-884e-7e3dfc718fd0.png)
+
+
+
+```
+
+```
+
+
+```
+
+```
+
 
