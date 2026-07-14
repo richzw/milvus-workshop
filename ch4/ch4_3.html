@@ -8032,7 +8032,7 @@ a.anchor-link {
 <hr/>
 <h3 id="2.-%E4%B8%8E%E5%90%91%E9%87%8F%E7%B4%A2%E5%BC%95%E7%9B%B8%E5%85%B3%E7%9A%84%E5%8F%82%E6%95%B0%E8%B0%83%E6%95%B4">2. 与向量索引相关的参数调整<a class="anchor-link" href="#2.-%E4%B8%8E%E5%90%91%E9%87%8F%E7%B4%A2%E5%BC%95%E7%9B%B8%E5%85%B3%E7%9A%84%E5%8F%82%E6%95%B0%E8%B0%83%E6%95%B4">¶</a></h3><p>除暴搜(FLAT)以外，向量索引一般执行的是<strong>向量近似搜索</strong>。从算法层面可以大致分为两类，即<strong>IVF-based和Graph-based</strong>。其中<strong>Graph索引在Search性能上优势非常明显，HNSW是市面上绝大多数向量数据库的推荐选择</strong>。Search性能优异的代价主要是在构建索引时需要更多的资源，构建后的索引也会相对更大，占用的内存相对更多一些。</p>
 <p>整理了几条与Graph索引相关的优化方向。</p>
-<h4 id="2.1-%E5%A2%9E%E5%A4%A7segment_size">2.1 增大<code>segment_size</code><a class="anchor-link" href="#2.1-%E5%A2%9E%E5%A4%A7segment_size">¶</a></h4><p>Milvus会将数据分为多个<strong><code>segment</code></strong>进行管理，每个<code>segment</code>会单独构建一个向量索引。Graph索引有一个比较反直觉的特性：每次搜索的计算量对<code>segment</code>大小不太敏感。简单来说，一个Graph膨胀到10x数据量，单次搜索的计算量可能仅仅只增加50%不到。这意味着，在Milvus使用<strong>HNSW</strong>的情况下，灌入同等的数据量，如果<strong>增大<code>segment_size</code>，<code>segment</code>的数量将会减少，性能将会明显提高</strong>。</p>
+<h4 id="2.1-%E5%A2%9E%E5%A4%A7segment_size">2.1 增大<code>segment_size</code><a class="anchor-link" href="#2.1-%E5%A2%9E%E5%A4%A7segment_size">¶</a></h4><p>Milvus会将数据分为多个**<code>segment</code><strong>进行管理，每个<code>segment</code>会单独构建一个向量索引。Graph索引有一个比较反直觉的特性：每次搜索的计算量对<code>segment</code>大小不太敏感。简单来说，一个Graph膨胀到10x数据量，单次搜索的计算量可能仅仅只增加50%不到。这意味着，在Milvus使用</strong>HNSW<strong>的情况下，灌入同等的数据量，如果</strong>增大<code>segment_size</code>，<code>segment</code>的数量将会减少，性能将会明显提高**。</p>
 <p>目前默认的<code>dataCoord.segment.maxSize</code>为<strong>1024MB</strong>，可以通过<code>milvus.yaml</code>进行修改。</p>
 <p><strong>代价</strong>：<code>segment</code>如果过大，会有一定<strong>稳定性风险</strong>。尤其是在数据频繁更新且内存水位较高的情况下，可能造成load失败。</p>
 <p><strong>调整建议</strong>：</p>
@@ -8048,25 +8048,25 @@ a.anchor-link {
 </ol>
 <p><strong>代价</strong>：单独使用量化<strong>不可逆地损失了精度</strong>，不适合&gt;=99%的<strong>高recall</strong>要求。</p>
 <p>Milvus提供大量的量化index供用户选择，例如<strong>IVF / HNSW 叠加 SQ / PQ / PRQ / RabitQ</strong>等。</p>
-<p><strong>调整建议</strong>：在长期的测试经验下，比较推荐将<code>index_type</code>设置为<strong><code>HNSW_SQ</code></strong>，量化类型设置为<strong><code>SQ8</code></strong>。相比于不做量化的HNSW，在<strong>recall 0.95的场景下，内存减少一半以上，QPS约提升25%</strong>。</p>
+<p><strong>调整建议</strong>：在长期的测试经验下，比较推荐将<code>index_type</code>设置为**<code>HNSW_SQ</code><strong>，量化类型设置为</strong><code>SQ8</code><strong>。相比于不做量化的HNSW，在</strong>recall 0.95的场景下，内存减少一半以上，QPS约提升25%**。</p>
 <h4 id="2.3-%E7%B4%A2%E5%BC%95%E5%8F%82%E6%95%B0">2.3 索引参数<a class="anchor-link" href="#2.3-%E7%B4%A2%E5%BC%95%E5%8F%82%E6%95%B0">¶</a></h4><p>索引参数将直接影响向量近似搜索算法的执行。可以简单理解为，<strong>任何索引参数的调整都是recall和QPS的互换</strong>。</p>
 <p>索引参数可以分为两类：</p>
 <ol>
-<li><strong>索引构建参数</strong>：在<code>create_index</code>时指定，<code>search</code>时不可修改。例如<strong><code>M</code></strong>，<strong><code>efConstruction</code></strong>。数值越大，recall越高，QPS越低。</li>
-<li><strong>索引查询参数</strong>：在<code>search</code>时可以根据实际业务情况修改。例如<strong><code>ef</code></strong>。数值越大，recall越高，QPS越低。</li>
+<li><strong>索引构建参数</strong>：在<code>create_index</code>时指定，<code>search</code>时不可修改。例如**<code>M</code><strong>，</strong><code>efConstruction</code>**。数值越大，recall越高，QPS越低。</li>
+<li><strong>索引查询参数</strong>：在<code>search</code>时可以根据实际业务情况修改。例如**<code>ef</code>**。数值越大，recall越高，QPS越低。</li>
 </ol>
-<p><strong>参数建议</strong>：对于<strong>HNSW</strong>而言，常见的建议是设置为<strong><code>M=16</code></strong>，<strong><code>efConstruction=256</code></strong>。<strong><code>ef</code></strong>设置为<strong><code>topk</code>大小即可</strong>。</p>
+<p><strong>参数建议</strong>：对于<strong>HNSW</strong>而言，常见的建议是设置为**<code>M=16</code><strong>，</strong><code>efConstruction=256</code><strong>。</strong><code>ef</code><strong>设置为</strong><code>topk</code>大小即可**。</p>
 <hr/>
-<h3 id="3.-Other-Tips">3. Other Tips<a class="anchor-link" href="#3.-Other-Tips">¶</a></h3><h4 id="3.1-flush">3.1 <code>flush</code><a class="anchor-link" href="#3.1-flush">¶</a></h4><p>Milvus使用<strong><code>growing segment</code></strong>管理新插入的数据。<code>growing</code>的设计保证了新插入数据的实时可见性和数据的动态增长。但是作为代价，<code>growing</code>所使用索引的搜索性能较差，会拖慢整体的搜索。调用<strong><code>flush()</code></strong>可以显式地要求Milvus将当前<code>growing segment</code>转为<strong><code>sealed segment</code></strong>，以构建更高效的索引提供搜索。</p>
+<h3 id="3.-Other-Tips">3. Other Tips<a class="anchor-link" href="#3.-Other-Tips">¶</a></h3><h4 id="3.1-flush">3.1 <code>flush</code><a class="anchor-link" href="#3.1-flush">¶</a></h4><p>Milvus使用**<code>growing segment</code><strong>管理新插入的数据。<code>growing</code>的设计保证了新插入数据的实时可见性和数据的动态增长。但是作为代价，<code>growing</code>所使用索引的搜索性能较差，会拖慢整体的搜索。调用</strong><code>flush()</code><strong>可以显式地要求Milvus将当前<code>growing segment</code>转为</strong><code>sealed segment</code>**，以构建更高效的索引提供搜索。</p>
 <p><strong>代价</strong>：<code>flush()</code>后会创建新的<code>growing segment</code>。<strong>频繁的<code>flush()</code>会造成<code>segment</code>碎片化</strong>。正如2.1中提到，<code>segment</code>数量过多对于性能是个灾难。</p>
 <p><strong>调整建议</strong>：建议在<strong>阶段性地集中地插入完数据后调用</strong>。对于没有明确行为预期的不定时不定量的数据更新行为，Milvus也有<strong>auto-flush的机制</strong>来处理。</p>
 <h4 id="3.2-wait_index_building">3.2 <code>wait_index_building</code><a class="anchor-link" href="#3.2-wait_index_building">¶</a></h4><p><strong>索引构建是需要大量计算资源的</strong>。<code>insert request</code>的完成并不意味着索引已经构建完成。尤其是在大规模写入的情况下，<code>insert</code>完后立即进行查询，Milvus并不能发挥最佳状态。</p>
 <p>可以通过<code>utility.index_building_progress</code>监控索引构建进度。
 相关PyMilvus API参考：<code>https://milvus.io/api-reference/pymilvus/v2.5.x/ORM/utility/index_building_progress.md</code>。</p>
-<h4 id="3.3-compact">3.3 <code>compact</code><a class="anchor-link" href="#3.3-compact">¶</a></h4><p>数据的删改对索引也会有一定程度的影响。尤其是<code>upsert</code>或者<code>delete</code>行为较多以后，向量索引会被一定程度的破坏，影响搜索的性能。用户可以显式地调用<strong><code>compact()</code></strong>来要求Milvus对当前collection的数据进行重新整理。在此过程中，<strong>碎片<code>segment</code>将会被合并，向量索引也将被重建修复，性能将会恢复</strong>。</p>
+<h4 id="3.3-compact">3.3 <code>compact</code><a class="anchor-link" href="#3.3-compact">¶</a></h4><p>数据的删改对索引也会有一定程度的影响。尤其是<code>upsert</code>或者<code>delete</code>行为较多以后，向量索引会被一定程度的破坏，影响搜索的性能。用户可以显式地调用**<code>compact()</code>**来要求Milvus对当前collection的数据进行重新整理。在此过程中，<strong>碎片<code>segment</code>将会被合并，向量索引也将被重建修复，性能将会恢复</strong>。</p>
 <p><strong>代价</strong>：<code>compact()</code><strong>涉及到数据重新划分和索引重建，需要消耗大量的资源</strong>。不建议频繁调用。Milvus后台也会有<strong>auto-compact的机制</strong>，来合并碎片<code>segment</code>和清理需要<code>delete</code>的数据。</p>
 <h4 id="3.4-%E7%89%B9%E6%AE%8A%E5%9C%BA%E6%99%AF---%E5%A4%A7K">3.4 特殊场景 - 大K<a class="anchor-link" href="#3.4-%E7%89%B9%E6%AE%8A%E5%9C%BA%E6%99%AF---%E5%A4%A7K">¶</a></h4><p>常见的Search行为大多<code>topk&lt;1000</code>，此时<strong>Graph索引具有明显优势</strong>。但当用户对<code>topk</code>有更高的需求（<code>&gt;10,000</code>）时，<strong>IVF会更有优势</strong>。</p>
-<h4 id="3.5-%E7%89%B9%E6%AE%8A%E5%9C%BA%E6%99%AF---%E6%9E%81%E8%87%B4%E5%8E%8B%E7%BC%A9">3.5 特殊场景 - 极致压缩<a class="anchor-link" href="#3.5-%E7%89%B9%E6%AE%8A%E5%9C%BA%E6%99%AF---%E6%9E%81%E8%87%B4%E5%8E%8B%E7%BC%A9">¶</a></h4><p>HNSW能提供特别高的recall（<code>&gt;90%</code>），但是部分用户对recall的需求没有那么高，希望用recall换取更少的内存占用和更高的性能。可以考虑将索引设置为<strong><code>SCANN</code></strong>或者<strong><code>IVF_RABITQ</code></strong>。其中<code>IVF_RABITQ</code>具有超高的压缩比例，在公开数据集Cohere 1M * 768dim的测试中，以1/32的压缩比例实现了75%以上的recall。</p>
+<h4 id="3.5-%E7%89%B9%E6%AE%8A%E5%9C%BA%E6%99%AF---%E6%9E%81%E8%87%B4%E5%8E%8B%E7%BC%A9">3.5 特殊场景 - 极致压缩<a class="anchor-link" href="#3.5-%E7%89%B9%E6%AE%8A%E5%9C%BA%E6%99%AF---%E6%9E%81%E8%87%B4%E5%8E%8B%E7%BC%A9">¶</a></h4><p>HNSW能提供特别高的recall（<code>&gt;90%</code>），但是部分用户对recall的需求没有那么高，希望用recall换取更少的内存占用和更高的性能。可以考虑将索引设置为**<code>SCANN</code><strong>或者</strong><code>IVF_RABITQ</code>**。其中<code>IVF_RABITQ</code>具有超高的压缩比例，在公开数据集Cohere 1M * 768dim的测试中，以1/32的压缩比例实现了75%以上的recall。</p>
 <h4 id="3.6-%E7%89%B9%E6%AE%8A%E5%9C%BA%E6%99%AF---%E6%A0%87%E9%87%8F%E8%BF%87%E6%BB%A4">3.6 特殊场景 - 标量过滤<a class="anchor-link" href="#3.6-%E7%89%B9%E6%AE%8A%E5%9C%BA%E6%99%AF---%E6%A0%87%E9%87%8F%E8%BF%87%E6%BB%A4">¶</a></h4><p><strong>标量过滤是向量搜索领域中非常具有挑战性的任务</strong>。Milvus针对HNSW做了非常多的过滤优化，在绝大部分生产场景都领先于竞品。优化后的HNSW在任意过滤条件下都保持了非常高的recall。但是也注意到，在<strong>85-95%过滤量下，其QPS表现较差</strong>。如果用户有大量90%过滤量的需求，可以考虑使用<strong>IVF索引</strong>。</p>
 <hr/>
 <p>最后还是要强调一下，Milvus是一个非常复杂的系统。其灵活性可以支撑各类用户的需求，但<strong>不存在一套配置参数满足所有用户</strong>。<strong>任何的调优行为都是针对不同需求的权衡，建议根据实际业务动态调整</strong>。</p>
