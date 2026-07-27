@@ -1,0 +1,6 @@
+-e demo
+streamlit>=1.37
+pymilvus==3.0.0
+langgraph==1.2.7
+openai>=2,<3
+pypdf>=5,<6

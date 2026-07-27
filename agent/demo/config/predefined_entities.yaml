@@ -1,0 +1,26 @@
+{
+  "catalog_version": "1",
+  "entities": [
+    {
+      "entity_id": "ui.go_button",
+      "entity": "GO按钮",
+      "aliases": ["跳转按钮", "领取按钮"],
+      "comment": "表示触发页面跳转或领取动作的按钮",
+      "domains": ["product", "game"]
+    },
+    {
+      "entity_id": "game.rank_tier",
+      "entity": "段位",
+      "aliases": ["段位"],
+      "comment": "表示游戏竞技系统中的玩家等级层级",
+      "domains": ["game"]
+    },
+    {
+      "entity_id": "hr.rank_tier",
+      "entity": "段位",
+      "aliases": ["段位"],
+      "comment": "表示内部人才分级语境中的非正式层级称呼",
+      "domains": ["hr"]
+    }
+  ]
+}

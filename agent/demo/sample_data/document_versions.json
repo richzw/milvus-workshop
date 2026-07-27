@@ -1,0 +1,17 @@
+{
+  "s3://internal-agent-chat-demo/product/go_button_guide_v1.md": {
+    "doc_id": "doc_go_button_guide",
+    "doc_version": "v1",
+    "is_current": false
+  },
+  "s3://internal-agent-chat-demo/product/go_button_guide_v2.md": {
+    "doc_id": "doc_go_button_guide",
+    "doc_version": "v2",
+    "is_current": true
+  },
+  "sample_data/local_docs/engineering/rag_architecture_v1.pdf": {
+    "doc_id": "doc_rag_arch",
+    "doc_version": "v1",
+    "is_current": true
+  }
+}
