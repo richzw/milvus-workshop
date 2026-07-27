@@ -1,0 +1,3 @@
+- Min-Max Chunking
+- RAG Eval methods, example and best practices
+-

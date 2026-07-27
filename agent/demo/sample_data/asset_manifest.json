@@ -1,0 +1,79 @@
+[
+  {
+    "asset_path": "engineering/rag_architecture_v1.pdf",
+    "doc_type": "pdf",
+    "record_type": "pdf_page",
+    "title": "RAG Architecture v1",
+    "section": "Retrieval Layer",
+    "page_no": 1,
+    "department": "engineering",
+    "priority": 9,
+    "text": "Milvus is the retrieval layer for the enterprise Agent Chat. It stores text_vector for semantic search, sparse_vector for BM25 style keyword retrieval, nullable image_vector for visual assets, and metadata fields such as source_type, doc_type, department, updated_at, priority, section, page_no, and chunk_id. This page answers that Milvus owns hybrid retrieval, metadata filter, order_by, aggregation, and citation-ready source records."
+  },
+  {
+    "asset_path": "engineering/rag_architecture_v1.pdf",
+    "doc_type": "pdf",
+    "record_type": "pdf_page",
+    "title": "RAG Architecture v1",
+    "section": "S3 Sync Flow",
+    "page_no": 3,
+    "department": "engineering",
+    "priority": 9,
+    "text": "Page 3 describes the S3 sync pipeline. The job scans buckets, detects changed objects, extracts metadata, parses Markdown PDF pages and image captions, chunks documents, generates embeddings, writes records into the Milvus kb_chunks collection, and returns chunk or page citations. This page is an expected source for the question about how the S3 document sync flow is designed."
+  },
+  {
+    "asset_path": "images/s3_sync_flow.png",
+    "doc_type": "image",
+    "record_type": "image",
+    "title": "S3 Sync Flow Diagram",
+    "section": "S3 Sync Flow",
+    "page_no": 3,
+    "department": "engineering",
+    "priority": 8,
+    "text": "Diagram showing the S3 sync flow from MinIO bucket scanning to Milvus insertion. The visual steps are bucket scanning, object change detection, metadata extraction, document parsing, chunking, text embedding generation, optional DINOv3 image embedding generation, MinHash dedup, and writing kb_chunks records with citations."
+  },
+  {
+    "asset_path": "images/rag_architecture.png",
+    "doc_type": "image",
+    "record_type": "image",
+    "title": "RAG Architecture Diagram",
+    "section": "Agent Chat Stack",
+    "page_no": null,
+    "department": "engineering",
+    "priority": 8,
+    "text": "Diagram showing the Agent Chat stack. Streamlit runs the LangGraph workflow directly, retrieval uses a Milvus hybrid retriever, ranking uses a reranker, evidence grading decides whether to retry, and answer generation streams citations back to the UI."
+  },
+  {
+    "asset_path": "images/milvus_hybrid_search.png",
+    "doc_type": "image",
+    "record_type": "image",
+    "title": "Milvus Hybrid Search Diagram",
+    "section": "Hybrid Search",
+    "page_no": null,
+    "department": "engineering",
+    "priority": 8,
+    "text": "Diagram showing Milvus hybrid search. Dense vector search handles semantic matches, sparse BM25 search handles exact keywords, metadata filter restricts source_type doc_type department and has_image_vector, order_by applies updated_at desc and priority desc, aggregation summarizes hits, and reranked context feeds the answer."
+  },
+  {
+    "asset_path": "images/agentic_rag_workflow.png",
+    "doc_type": "image",
+    "record_type": "image",
+    "title": "Agentic RAG Workflow Diagram",
+    "section": "LangGraph Workflow",
+    "page_no": null,
+    "department": "engineering",
+    "priority": 8,
+    "text": "Diagram showing intent classification, permission check, knowledge-tool selection, bounded query decomposition, one or more Milvus retrieval calls, reranking, evidence grading, targeted supplementary retrieval, answer generation, and citation self-check. The trace records selected tools, query-plan dependencies, tool-owned filters, coverage, retries, metrics, and citations."
+  },
+  {
+    "asset_path": "images/ingestion_pipeline.png",
+    "doc_type": "image",
+    "record_type": "image",
+    "title": "Ingestion Pipeline Diagram",
+    "section": "Ingestion Pipeline",
+    "page_no": null,
+    "department": "engineering",
+    "priority": 8,
+    "text": "Diagram showing local documents, mock S3 documents, PDF page extraction, image caption extraction, metadata enrichment, checksum and MinHash dedup, text_vector generation, sparse_vector generation, optional image_vector generation, and Milvus insertion into kb_chunks and doc_dedup_signatures."
+  }
+]

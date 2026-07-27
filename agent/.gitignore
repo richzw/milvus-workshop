@@ -1,0 +1,6 @@
+# Local credentials and machine-specific demo configuration.
+demo/.env
+
+# Python runtime artifacts.
+__pycache__/
+*.py[cod]

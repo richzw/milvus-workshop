@@ -1,0 +1,86 @@
+q001:
+  question: "我们 S3 文档同步流程是怎么设计的？"
+  golden_answer: >
+    S3 文档同步流程包括 bucket scanning、change detection、document parsing、
+    chunking、embedding generation，以及 Milvus insertion。
+  required_facts:
+    - "bucket scanning"
+    - "change detection"
+    - "document parsing"
+    - "chunking"
+    - "embedding generation"
+    - "Milvus insertion"
+  required_citations:
+    - "doc_s3_sync_design_c003"
+    - "doc_rag_arch_v1_p003_c002"
+
+q002:
+  question: "RAG 架构里 Milvus 负责哪一层？"
+  golden_answer: >
+    Milvus 负责向量与混合检索层，存储 text_vector、sparse_vector 和可选 image_vector，
+    并支持 metadata filter、order by 和 aggregation。
+  required_facts:
+    - "hybrid retrieval"
+    - "text vector"
+    - "sparse vector"
+    - "metadata filter"
+    - "order by"
+  required_citations:
+    - "doc_milvus_feature_map_c001"
+
+q003:
+  question: "这个完全不存在的采购审批宇宙飞船编号是什么？"
+  golden_answer: >
+    证据不足，应当拒绝回答。
+  required_facts:
+  required_citations:
+
+q004:
+  question: "本季度客户最关心的问题有没有被产品路线图覆盖？"
+  golden_answer: >
+    路线图覆盖 data freshness、citation 和 Agent trace，
+    但细粒度 permission 与 production ACL 尚未覆盖。
+  required_facts:
+    - "data freshness"
+    - "citation"
+    - "Agent trace"
+    - "permission"
+    - "production ACL"
+  required_citations:
+    - "doc_customer_meeting_notes_c001"
+    - "doc_product_roadmap_c001"
+
+q005:
+  question: "领取按钮现在表示什么？"
+  golden_answer: >
+    当前 v2 的 GO按钮会根据用户状态直接领取奖励或跳转到活动详情页。
+  required_facts:
+    - "直接领取"
+    - "活动详情页"
+  required_citations:
+    - "doc_go_button_guide_v2_c001"
+    - "doc_go_button_guide_v2_c002"
+
+q006:
+  question: "跳转按钮在 v1 表示什么？"
+  golden_answer: >
+    v1 的 GO按钮只负责页面跳转，领取奖励需要在详情页再次确认。
+  required_facts:
+    - "页面跳转"
+    - "再次确认"
+  required_citations:
+    - "doc_go_button_guide_v1_c001"
+    - "doc_go_button_guide_v1_c002"
+
+q007:
+  question: "比较 GO按钮 v1 和 v2 的变化"
+  golden_answer: >
+    v1 只负责跳转；v2 会根据用户状态直接领取或跳转。
+  required_facts:
+    - "v1"
+    - "v2"
+    - "直接领取"
+    - "跳转"
+  required_citations:
+    - "doc_go_button_guide_v1_c001"
+    - "doc_go_button_guide_v2_c001"

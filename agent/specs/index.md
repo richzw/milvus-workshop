@@ -1,0 +1,67 @@
+# Agent Workshop Specs
+
+Status: draft v3 · Last updated: 2026-07-27
+
+本目录是 Agent Workshop 的权威设计入口。编号表示依赖与建议阅读顺序；旧稿仅作为需求来源保存在 [`archive/`](./archive/README.md)，不再定义实现契约。
+
+## Spec map
+
+| Spec | 类型 | 回答的问题 |
+| --- | --- | --- |
+| [`00-prd.md`](./00-prd.md) | PRD | 为什么做、为谁做、MVP 做到什么程度？ |
+| [`10-data-model.md`](./10-data-model.md) | Foundation | 数据存在哪里，实体 catalog、文档版本、核心字段和不变量是什么？ |
+| [`10a-openai-text-embedding.md`](./10a-openai-text-embedding.md) | Foundation | 如何用 OpenAI 生成真实文本向量且不迁移现有 Milvus schema？ |
+| [`10b-conversation-memory.md`](./10b-conversation-memory.md) | Foundation | 多轮会话如何安全写入、按 session/TTL 召回、展示和清除？ |
+| [`11-ingestion.md`](./11-ingestion.md) | Component | 本地与 MinIO 文档如何离线进入知识库？ |
+| [`12-agent-workflow.md`](./12-agent-workflow.md) | Component | Agent 如何理解领域术语、选择文档版本与工具、拆解问题、多跳检索、自检并回答？ |
+| [`13-llm-answer-generation.md`](./13-llm-answer-generation.md) | Component | selected chunks 如何由 OpenAI 合成为带受控 citation 的答案？ |
+| [`20-ui-demo.md`](./20-ui-demo.md) | Integration | Streamlit 如何呈现答案、证据、Trace 与 Milvus 特性？ |
+| [`70-quality-and-evaluation.md`](./70-quality-and-evaluation.md) | Cross-cut | 如何验证正确性、可复现性、安全边界和性能？ |
+| [`80-glossary.md`](./80-glossary.md) | Glossary | 容易混淆的术语在本项目中分别指什么？ |
+| [`90-roadmap.md`](./90-roadmap.md) | Roadmap | 用户可见能力按什么里程碑交付？ |
+| [`91-impl-plan.md`](./91-impl-plan.md) | Implementation | 工程上按什么依赖顺序实现？ |
+| [`93-improvements-review.md`](./93-improvements-review.md) | Review backlog | 第一版审查发现了什么，哪些已修复或仍待验证？ |
+| [`99-key-decisions.md`](./99-key-decisions.md) | Decisions | 关键选择为什么这样定？ |
+
+## Reading order
+
+1. 先读 PRD，确认 MVP 边界与成功标准。
+2. 按 `10 → 10a → 10b → 11 → 12 → 13 → 20` 理解数据和运行链路。
+3. 用 `70` 检查每个组件的质量门槛。
+4. Stakeholder 读 `90`；实现者从 `91` 的 Phase 0 开始。
+5. 对设计理由有疑问时查 `99`，术语歧义查 `80`。
+
+## Build-order graph
+
+```text
+┌──────────────────────────── Product boundary ────────────────────────────┐
+│  00 PRD                                                                 │
+└──────────────────────────────────┬───────────────────────────────────────┘
+                                   ▼
+┌──────────────────────────── Data foundation ────────────────────────────┐
+│  10 Data Model ─▶ 10a OpenAI Embedding ─▶ 10b Memory ─▶ 11 Ingestion  │
+└──────────────────┬───────────────────────────────┬───────────────────────┘
+                   │ indexed knowledge             │ fixtures / citations
+                   ▼                               ▼
+┌──────────────────────────── Runtime boundary ───────────────────────────┐
+│  12 Agent Workflow ──▶ 13 LLM Generation ─────▶ 20 Streamlit UI        │
+│  entities/version/tools   OpenAI + fallback         Chat/Evidence/Trace  │
+└─────────────────────────────┬────────────────────────────────────────────┘
+                              ▼
+┌──────────────────────────── Quality gates ──────────────────────────────┐
+│  70 Evaluation + reproducibility + local-demo security boundary         │
+└─────────────────────────────┬────────────────────────────────────────────┘
+                              ▼
+             90 User milestones ↔ 91 Engineering phases
+                              │
+                              ▼
+                       99 Key decisions
+```
+
+## Source status
+
+- `docs/research/` 与 `vendors/` 当前不存在，因此没有可引用的 prior-art memo 或 vendored implementation。
+- Milvus 3.0 的 nullable vector、BM25/sparse、`order_by`、aggregation、TTL 和 BinaryVector/MinHash 适配性尚未在本仓库验证，统一列入 [`91-impl-plan.md § Phase 0`](./91-impl-plan.md#3-phase-0--risk-retirement)。
+- OpenAI SDK 2.46.0 的 Responses interface 与 fake-client 合同已经验证；真实模型调用仍需使用显式凭据执行 [`13-llm-answer-generation.md § Tests and acceptance`](./13-llm-answer-generation.md#9-tests-and-acceptance) 的 opt-in smoke test。
+- OpenAI SDK 2.46.0 的 Embeddings request signature 与 fake-client 合同已经验证；真实 1024 维响应仍需执行 [`10a-openai-text-embedding.md § Tests and acceptance`](./10a-openai-text-embedding.md#7-tests-and-acceptance) 的 opt-in smoke test。
+- 未通过 Phase 0 的能力不得作为 MVP 的硬依赖；必须降级、改为预计算展示，或从该里程碑移除。
