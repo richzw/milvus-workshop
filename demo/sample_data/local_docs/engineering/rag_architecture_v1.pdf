@@ -1,0 +1,120 @@
+%PDF-1.4
+% Agent Workshop Demo PDF
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 1959 >> stream
+BT
+/F1 20 Tf
+72 742 Td
+15 TL
+/F1 20 Tf
+(RAG Architecture v1) Tj
+T*
+/F1 11 Tf
+() Tj
+T*
+/F1 14 Tf
+(1. Milvus Retrieval Layer) Tj
+T*
+/F1 11 Tf
+(Milvus is the retrieval layer for the enterprise Agent Chat demo.) Tj
+T*
+/F1 11 Tf
+(It stores text_vector for semantic search.) Tj
+T*
+/F1 11 Tf
+(It stores sparse_vector for BM25 keyword retrieval.) Tj
+T*
+/F1 11 Tf
+(It stores nullable image_vector for diagram evidence.) Tj
+T*
+/F1 11 Tf
+(Metadata fields include source_type, doc_type, department,) Tj
+T*
+/F1 11 Tf
+(updated_at, priority, section, page_no, and chunk_id.) Tj
+T*
+/F1 11 Tf
+() Tj
+T*
+/F1 14 Tf
+(2. S3 Sync Flow) Tj
+T*
+/F1 11 Tf
+(The S3 sync job performs bucket scanning.) Tj
+T*
+/F1 11 Tf
+(It performs change detection for updated objects.) Tj
+T*
+/F1 11 Tf
+(It extracts metadata from object storage.) Tj
+T*
+/F1 11 Tf
+(It runs document parsing for Markdown, PDF pages, and images.) Tj
+T*
+/F1 11 Tf
+(It performs chunking with stable doc_id and chunk_id values.) Tj
+T*
+/F1 11 Tf
+(It runs embedding generation for text and optional images.) Tj
+T*
+/F1 11 Tf
+(It performs Milvus insertion into the kb_chunks collection.) Tj
+T*
+/F1 11 Tf
+(These facts support the S3 sync pipeline question.) Tj
+T*
+/F1 11 Tf
+() Tj
+T*
+/F1 14 Tf
+(3. Hybrid Retrieval) Tj
+T*
+/F1 11 Tf
+(Hybrid retrieval combines dense vector search and sparse BM25.) Tj
+T*
+/F1 11 Tf
+(Milvus applies metadata filter by source_type and department.) Tj
+T*
+/F1 11 Tf
+(Search exposes order_by with updated_at desc and priority desc.) Tj
+T*
+/F1 11 Tf
+(The UI shows aggregation by source_type, doc_type, department,) Tj
+T*
+/F1 11 Tf
+(and has_image_vector.) Tj
+T*
+/F1 11 Tf
+() Tj
+T*
+/F1 14 Tf
+(4. Agentic RAG Workflow) Tj
+T*
+/F1 11 Tf
+(LangGraph runs classify_query and rewrite_query.) Tj
+T*
+/F1 11 Tf
+(It then runs milvus_hybrid_retrieve and rerank_evidence.) Tj
+T*
+/F1 11 Tf
+(grade_evidence decides whether to retry up to 3 times.) Tj
+T*
+/F1 11 Tf
+(generate_answer_streaming returns cited answer chunks.) Tj
+ET
+endstream endobj
+xref
+0 6
+0000000000 65535 f 
+0000000035 00000 n 
+0000000084 00000 n 
+0000000141 00000 n 
+0000000267 00000 n 
+0000000337 00000 n 
+trailer << /Size 6 /Root 1 0 R >>
+startxref
+2348
+%%EOF

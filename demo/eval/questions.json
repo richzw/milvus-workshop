@@ -1,0 +1,80 @@
+[
+  {
+    "question_id": "q001",
+    "question": "我们 S3 文档同步流程是怎么设计的？",
+    "category": "architecture",
+    "expected_sources": [
+      "doc_s3_sync_design_c003",
+      "doc_rag_arch_v1_p003_c002"
+    ],
+    "expected_tools": ["search_code_docs"]
+  },
+  {
+    "question_id": "q002",
+    "question": "RAG 架构里 Milvus 负责哪一层？",
+    "category": "architecture",
+    "expected_sources": [
+      "doc_milvus_feature_map_c001"
+    ],
+    "expected_tools": ["search_code_docs"]
+  },
+  {
+    "question_id": "q003",
+    "question": "这个完全不存在的采购审批宇宙飞船编号是什么？",
+    "category": "unknown",
+    "expected_sources": [],
+    "expected_tools": ["search_code_docs"],
+    "should_abstain": true
+  },
+  {
+    "question_id": "q004",
+    "question": "本季度客户最关心的问题有没有被产品路线图覆盖？",
+    "category": "comparison",
+    "expected_sources": [
+      "doc_customer_meeting_notes_c001",
+      "doc_product_roadmap_c001"
+    ],
+    "expected_tools": [
+      "search_meeting_notes",
+      "search_product_docs"
+    ]
+  },
+  {
+    "question_id": "q005",
+    "question": "领取按钮现在表示什么？",
+    "category": "terminology",
+    "expected_sources": [
+      "doc_go_button_guide_v2_c001",
+      "doc_go_button_guide_v2_c002"
+    ],
+    "expected_tools": ["search_product_docs"],
+    "expected_entities": ["ui.go_button"],
+    "expected_version_scope": "current"
+  },
+  {
+    "question_id": "q006",
+    "question": "跳转按钮在 v1 表示什么？",
+    "category": "terminology",
+    "expected_sources": [
+      "doc_go_button_guide_v1_c001",
+      "doc_go_button_guide_v1_c002"
+    ],
+    "expected_tools": ["search_product_docs"],
+    "expected_entities": ["ui.go_button"],
+    "expected_version_scope": "exact",
+    "expected_doc_versions": ["v1"]
+  },
+  {
+    "question_id": "q007",
+    "question": "比较 GO按钮 v1 和 v2 的变化",
+    "category": "version_comparison",
+    "expected_sources": [
+      "doc_go_button_guide_v1_c001",
+      "doc_go_button_guide_v2_c001"
+    ],
+    "expected_tools": ["search_product_docs"],
+    "expected_entities": ["ui.go_button"],
+    "expected_version_scope": "comparison",
+    "expected_doc_versions": ["v1", "v2"]
+  }
+]
