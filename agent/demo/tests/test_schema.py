@@ -11,7 +11,11 @@ from agent_workshop_demo.sample_data import load_kb_chunks
 from agent_workshop_demo.schema.collections import (
     CONVERSATION_MEMORY_COLLECTION,
     DOC_DEDUP_SIGNATURES_COLLECTION,
+    GROUNDED_RESPONSE_CACHE_COLLECTION,
     KB_CHUNKS_COLLECTION,
+    MEMORY_EVENTS_COLLECTION,
+    MEMORY_FACTS_COLLECTION,
+    MEMORY_CONSOLIDATION_JOURNAL_COLLECTION,
 )
 from agent_workshop_demo.schema.pymilvus_adapter import MilvusHybridRetriever
 from agent_workshop_demo.schema.pymilvus_adapter import (
@@ -41,6 +45,7 @@ class RecordingMilvusClient:
         self.flushed: list[str] = []
         self.loaded: list[str] = []
         self.search_calls: list[dict[str, Any]] = []
+        self.query_calls: list[dict[str, Any]] = []
         self.search_results: dict[str, list[list[dict[str, Any]]]] = {}
         self.query_results: list[dict[str, Any]] | None = None
 
@@ -66,12 +71,11 @@ class RecordingMilvusClient:
         self.loaded.append(collection_name)
 
     def query(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.query_calls.append(kwargs)
         if self.query_results is not None:
             return self.query_results
         expected = {
-            record["chunk_id"]
-            for call in self.inserted
-            for record in call["data"]
+            record["chunk_id"] for call in self.inserted for record in call["data"]
         }
         return [{"chunk_id": chunk_id} for chunk_id in sorted(expected)]
 
@@ -94,11 +98,14 @@ class ProvisioningMilvusClient:
     def __init__(self) -> None:
         self.collections: set[str] = set()
         self.indexes: dict[str, set[str]] = {}
+        self.collection_calls: list[dict[str, Any]] = []
 
     def has_collection(self, *, collection_name: str) -> bool:
         return collection_name in self.collections
 
-    def create_collection(self, *, collection_name: str, schema: Any) -> None:
+    def create_collection(self, **kwargs: Any) -> None:
+        collection_name = str(kwargs["collection_name"])
+        self.collection_calls.append(kwargs)
         self.collections.add(collection_name)
         self.indexes.setdefault(collection_name, set())
 
@@ -124,9 +131,7 @@ class ProvisioningMilvusClient:
     def list_indexes(self, *, collection_name: str) -> list[str]:
         return sorted(self.indexes[collection_name])
 
-    def drop_index(
-        self, *, collection_name: str, index_name: str
-    ) -> None:
+    def drop_index(self, *, collection_name: str, index_name: str) -> None:
         self.indexes[collection_name].discard(index_name)
 
     @staticmethod
@@ -141,8 +146,7 @@ class SchemaTests(unittest.TestCase):
         client = RecordingMilvusClient()
 
         with patch(
-            "agent_workshop_demo.embedding."
-            "_default_text_embedding_provider",
+            "agent_workshop_demo.embedding._default_text_embedding_provider",
             return_value=provider,
         ):
             result = ingest_demo_sources(
@@ -181,25 +185,14 @@ class SchemaTests(unittest.TestCase):
         first_record = client.inserted[0]["data"][0]
         self.assertNotIn("id", first_record)
         self.assertEqual(first_record["chunk_id"], chunks[0].chunk_id)
-        self.assertTrue(first_record["sparse_vector"])
-        self.assertTrue(
-            all(
-                isinstance(index, int)
-                for index in first_record["sparse_vector"]
-            )
-        )
+        self.assertNotIn("sparse_vector", first_record)
+        self.assertIn(chunks[0].title, first_record["retrieval_text"])
         self.assertEqual(
             first_record["metadata"]["text_embedding_fingerprint"],
             "deterministic:sha256-token-v1:1024",
         )
-        records = [
-            record
-            for call in client.inserted
-            for record in call["data"]
-        ]
-        self.assertTrue(
-            any("image_vector" not in record for record in records)
-        )
+        records = [record for call in client.inserted for record in call["data"]]
+        self.assertTrue(any("image_vector" not in record for record in records))
 
     def test_milvus_adapter_rejects_mismatched_embedding_space(self) -> None:
         client = RecordingMilvusClient()
@@ -216,6 +209,36 @@ class SchemaTests(unittest.TestCase):
             MilvusHybridRetriever(client).insert([mismatched])
 
         self.assertEqual(client.inserted, [])
+
+    def test_milvus_rejects_existing_image_vector_space_before_mutation(
+        self,
+    ) -> None:
+        client = RecordingMilvusClient()
+        image_chunk = next(
+            chunk for chunk in load_kb_chunks() if chunk.has_image_vector
+        )
+        client.query_results = [
+            {
+                "metadata": {
+                    "image_embedding_fingerprint": (
+                        "dinov3:other-model:pooler_output:l2:768"
+                    )
+                }
+            }
+        ]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "image embedding-space replacement is unsafe",
+        ):
+            MilvusHybridRetriever(client).insert([image_chunk])
+
+        self.assertEqual(client.deleted, [])
+        self.assertEqual(client.inserted, [])
+        self.assertEqual(
+            client.query_calls[0]["filter"],
+            "has_image_vector == true",
+        )
 
     def test_milvus_adapter_rejects_unsafe_current_edition_replacement(
         self,
@@ -253,9 +276,7 @@ class SchemaTests(unittest.TestCase):
         entity = chunk.to_dict()
         client.search_results = {
             "text_vector": [[{"id": 7, "distance": 0.91, "entity": entity}]],
-            "sparse_vector": [
-                [{"id": 7, "distance": 0.82, "entity": entity}]
-            ],
+            "sparse_vector": [[{"id": 7, "distance": 0.82, "entity": entity}]],
         }
         adapter = MilvusHybridRetriever(client)
 
@@ -290,22 +311,52 @@ class SchemaTests(unittest.TestCase):
             for call in client.search_calls
             if call["anns_field"] == "sparse_vector"
         )
-        self.assertTrue(
-            all(isinstance(index, int) for index in sparse_call["data"][0])
-        )
+        self.assertEqual(sparse_call["data"], ["S3 文档同步"])
         self.assertEqual(
             sparse_call["search_params"]["metric_type"],
-            "IP",
+            "BM25",
         )
         self.assertNotIn("text_vector", sparse_call["output_fields"])
         self.assertNotIn("sparse_vector", sparse_call["output_fields"])
-        self.assertNotIn("image_vector", sparse_call["output_fields"])
+        self.assertIn("image_vector", sparse_call["output_fields"])
         self.assertEqual(results[0].chunk.chunk_id, chunk.chunk_id)
         self.assertEqual(results[0].rank, 1)
         self.assertGreater(results[0].hybrid_score, 0.9)
+        client.query_results = [
+            {"source_type": chunk.source_type, "count(*)": 1}
+        ]
         self.assertEqual(
             adapter.aggregations(results, ["source_type"]),
             {"source_type": {chunk.source_type: 1}},
+        )
+
+    def test_milvus_text_search_materializes_image_hits(self) -> None:
+        client = RecordingMilvusClient()
+        image_chunk = next(
+            chunk for chunk in load_kb_chunks() if chunk.has_image_vector
+        )
+        hit = {
+            "id": 12,
+            "distance": 0.88,
+            "entity": image_chunk.to_dict(),
+        }
+        client.search_results = {
+            "text_vector": [[hit]],
+            "sparse_vector": [[hit]],
+        }
+
+        results = MilvusHybridRetriever(client).search(
+            "同步架构图",
+            top_k=1,
+        )
+
+        self.assertEqual(results[0].chunk.chunk_id, image_chunk.chunk_id)
+        self.assertEqual(
+            results[0].chunk.image_vector,
+            image_chunk.image_vector,
+        )
+        self.assertTrue(
+            all("image_vector" in call["output_fields"] for call in client.search_calls)
         )
 
     def test_milvus_search_rejects_stored_embedding_mismatch(self) -> None:
@@ -325,6 +376,41 @@ class SchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "embedding fingerprint"):
             MilvusHybridRetriever(client).search("query", top_k=1)
 
+    def test_milvus_document_expansion_uses_authorized_exact_family_query(
+        self,
+    ) -> None:
+        client = RecordingMilvusClient()
+        chunk = load_kb_chunks()[0]
+        client.query_results = [chunk.to_dict()]
+
+        chunks = MilvusHybridRetriever(client).fetch_document_chunks(
+            doc_id=chunk.doc_id,
+            doc_version=chunk.doc_version,
+            filters={
+                "department": chunk.department,
+                "is_current": chunk.is_current,
+            },
+            limit=20,
+        )
+
+        self.assertEqual([item.chunk_id for item in chunks], [chunk.chunk_id])
+        call = client.query_calls[-1]
+        self.assertEqual(call["collection_name"], "kb_chunks")
+        self.assertEqual(call["limit"], 20)
+        self.assertIn(f'doc_id == "{chunk.doc_id}"', call["filter"])
+        self.assertIn(
+            f'doc_version == "{chunk.doc_version}"',
+            call["filter"],
+        )
+        self.assertIn(
+            f'department == "{chunk.department}"',
+            call["filter"],
+        )
+        self.assertIn(
+            f"is_current == {str(chunk.is_current).lower()}",
+            call["filter"],
+        )
+
     def test_milvus_reader_rejects_legacy_rows_without_version_fields(
         self,
     ) -> None:
@@ -342,10 +428,7 @@ class SchemaTests(unittest.TestCase):
             MilvusHybridRetriever(client).search("query", top_k=1)
 
     def test_kb_chunks_contains_required_multimodal_fields(self) -> None:
-        fields = {
-            field["name"]: field
-            for field in KB_CHUNKS_COLLECTION["fields"]
-        }
+        fields = {field["name"]: field for field in KB_CHUNKS_COLLECTION["fields"]}
 
         self.assertEqual(fields["text_vector"]["type"], "FloatVector")
         self.assertEqual(
@@ -358,6 +441,26 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("priority", fields)
         self.assertFalse(fields["doc_version"]["nullable"])
         self.assertFalse(fields["is_current"]["nullable"])
+
+    def test_grounded_response_cache_has_stable_scope_and_evidence(self) -> None:
+        fields = {
+            field["name"]: field
+            for field in GROUNDED_RESPONSE_CACHE_COLLECTION["fields"]
+        }
+
+        self.assertTrue(fields["cache_id"]["primary_key"])
+        self.assertFalse(fields["cache_id"]["auto_id"])
+        self.assertEqual(fields["query_vector"]["dim"], 1024)
+        self.assertEqual(fields["answer"]["max_length"], 12000)
+        for name in (
+            "version_scope",
+            "entity_ids",
+            "query_constraints",
+            "citations",
+            "evidence",
+        ):
+            self.assertEqual(fields[name]["type"], "JSON")
+            self.assertFalse(fields[name]["nullable"])
 
     def test_all_requested_collections_are_named(self) -> None:
         self.assertEqual(
@@ -372,6 +475,24 @@ class SchemaTests(unittest.TestCase):
             DOC_DEDUP_SIGNATURES_COLLECTION["collection_name"],
             "doc_dedup_signatures",
         )
+        self.assertEqual(
+            MEMORY_EVENTS_COLLECTION["collection_name"],
+            "memory_events",
+        )
+        self.assertEqual(
+            MEMORY_FACTS_COLLECTION["collection_name"],
+            "memory_facts",
+        )
+        self.assertEqual(
+            MEMORY_CONSOLIDATION_JOURNAL_COLLECTION["collection_name"],
+            "memory_consolidation_journal",
+        )
+        journal_fields = {
+            field["name"]: field
+            for field in MEMORY_CONSOLIDATION_JOURNAL_COLLECTION["fields"]
+        }
+        self.assertEqual(journal_fields["journal_anchor_vector"]["type"], "FloatVector")
+        self.assertEqual(journal_fields["journal_anchor_vector"]["dim"], 2)
 
     def test_sample_data_has_nullable_image_vectors(self) -> None:
         chunks = load_kb_chunks()
@@ -392,9 +513,7 @@ class SchemaTests(unittest.TestCase):
         adapter = MilvusHybridRetriever(client, batch_size=2)
 
         adapter.insert(chunks)
-        verified = adapter.verify_inserted(
-            chunk.chunk_id for chunk in chunks
-        )
+        verified = adapter.verify_inserted(chunk.chunk_id for chunk in chunks)
 
         self.assertEqual(verified, 3)
         self.assertEqual(client.loaded, ["kb_chunks", "kb_chunks"])
@@ -409,10 +528,20 @@ class SchemaTests(unittest.TestCase):
             {
                 "kb_chunks",
                 "conversation_memory",
+                "grounded_response_cache",
                 "doc_dedup_signatures",
+                "memory_events",
+                "memory_facts",
+                "memory_consolidation_journal",
             },
         )
         self.assertEqual(set(report["verified"]), client.collections)
+        ttl_calls = [
+            call
+            for call in client.collection_calls
+            if call.get("properties") == {"ttl_field": "expires_at"}
+        ]
+        self.assertEqual(len(ttl_calls), 4)
 
     def test_cleanup_drops_only_demo_collections_and_is_idempotent(self) -> None:
         client = ProvisioningMilvusClient()
@@ -420,7 +549,11 @@ class SchemaTests(unittest.TestCase):
             {
                 "kb_chunks",
                 "conversation_memory",
+                "grounded_response_cache",
                 "doc_dedup_signatures",
+                "memory_events",
+                "memory_facts",
+                "memory_consolidation_journal",
                 "unrelated_application_data",
             }
         )
@@ -433,7 +566,11 @@ class SchemaTests(unittest.TestCase):
             {
                 "kb_chunks",
                 "conversation_memory",
+                "grounded_response_cache",
                 "doc_dedup_signatures",
+                "memory_events",
+                "memory_facts",
+                "memory_consolidation_journal",
             },
         )
         self.assertEqual(first["already_absent"], [])
@@ -456,6 +593,18 @@ class SchemaTests(unittest.TestCase):
         self.assertIn(
             "minhash_signature_idx",
             client.indexes["doc_dedup_signatures"],
+        )
+        self.assertIn(
+            "content_vector_idx",
+            client.indexes["memory_events"],
+        )
+        self.assertIn(
+            "content_vector_idx",
+            client.indexes["memory_facts"],
+        )
+        self.assertIn(
+            "journal_anchor_vector_idx",
+            client.indexes["memory_consolidation_journal"],
         )
         self.assertEqual(
             set(report["kb_chunks"]["verified"]),

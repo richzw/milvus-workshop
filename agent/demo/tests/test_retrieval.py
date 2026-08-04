@@ -98,6 +98,29 @@ class RetrievalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "top_k"):
             retriever.search("Milvus", top_k=0)
 
+    def test_fetch_document_chunks_preserves_filters_and_document_order(
+        self,
+    ) -> None:
+        retriever = InMemoryHybridRetriever(load_kb_chunks())
+
+        chunks = retriever.fetch_document_chunks(
+            doc_id="doc_go_button_guide",
+            doc_version="v2",
+            filters={
+                "department": "product",
+                "is_current": True,
+            },
+            limit=10,
+        )
+
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(
+            [chunk.chunk_index for chunk in chunks],
+            sorted(chunk.chunk_index for chunk in chunks),
+        )
+        self.assertEqual({chunk.doc_version for chunk in chunks}, {"v2"})
+        self.assertTrue(all(chunk.is_current for chunk in chunks))
+
 
 if __name__ == "__main__":
     unittest.main()

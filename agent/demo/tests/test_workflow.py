@@ -4,6 +4,8 @@ import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
 from io import StringIO
+from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 from agent_workshop_demo.cli import main
@@ -12,7 +14,18 @@ from agent_workshop_demo.generation import (
     GenerationResult,
 )
 from agent_workshop_demo.langgraph_workflow import build_default_workflow
-from agent_workshop_demo.models import SearchResult
+from agent_workshop_demo.ingestion import ingest_demo_sources
+from agent_workshop_demo.memory import ConversationMemoryStore, MemoryRecord
+from agent_workshop_demo.models import (
+    AgentState,
+    KBChunk,
+    QueryRoute,
+    QueryRouteResult,
+    RerankedResult,
+    RetrievalPlanResult,
+    SearchResult,
+)
+from agent_workshop_demo.reranker import RerankRun, RuleBasedReranker
 from agent_workshop_demo.retrieval import InMemoryHybridRetriever
 from agent_workshop_demo.sample_data import load_kb_chunks
 from agent_workshop_demo.workflow import (
@@ -60,6 +73,7 @@ class StaticRetriever:
         top_k: int,
         filters: dict[str, Any] | None = None,
         order_by: list[str] | None = None,
+        order_mode: Any = "relevance",
     ) -> list[SearchResult]:
         return self.results[:top_k]
 
@@ -70,8 +84,148 @@ class StaticRetriever:
     ) -> dict[str, dict[str, int]]:
         return {}
 
+    def fetch_document_chunks(
+        self,
+        *,
+        doc_id: str,
+        doc_version: str,
+        filters: dict[str, Any] | None = None,
+        limit: int,
+    ) -> list[KBChunk]:
+        return [
+            result.chunk
+            for result in self.results
+            if result.chunk.doc_id == doc_id
+            and result.chunk.doc_version == doc_version
+        ][:limit]
+
+    def fetch_chunks_by_ids(
+        self,
+        *,
+        chunk_ids: list[str],
+        filters: dict[str, Any] | None = None,
+    ) -> list[KBChunk]:
+        requested = set(chunk_ids)
+        return [
+            result.chunk
+            for result in self.results
+            if result.chunk.chunk_id in requested
+        ]
+
+
+class RecordingReranker(RuleBasedReranker):
+    def __init__(self) -> None:
+        self.input_counts: list[int] = []
+
+    def rerank(
+        self,
+        query: str,
+        chunks: list[SearchResult],
+        top_k: int,
+    ) -> RerankRun:
+        self.input_counts.append(len(chunks))
+        return super().rerank(query, chunks, top_k)
+
+
+class SectionScoreReranker:
+    name = "section-score"
+
+    def __init__(
+        self,
+        *,
+        section_scores: dict[str, float] | None = None,
+        default_score: float = 0.05,
+    ) -> None:
+        self.section_scores = section_scores or {}
+        self.default_score = default_score
+
+    def rerank(
+        self,
+        query: str,
+        chunks: list[SearchResult],
+        top_k: int,
+    ) -> RerankRun:
+        del query
+        scored = [
+            (
+                self.section_scores.get(
+                    item.chunk.section or "",
+                    self.default_score,
+                ),
+                item,
+            )
+            for item in chunks
+        ]
+        ordered = sorted(scored, key=lambda pair: (-pair[0], pair[1].rank))
+        return RerankRun(
+            results=tuple(
+                RerankedResult(
+                    search_result=item,
+                    rerank=index,
+                    old_rank=item.rank,
+                    rerank_score=score,
+                )
+                for index, (score, item) in enumerate(
+                    ordered[:top_k],
+                    start=1,
+                )
+            ),
+            reranker_name=self.name,
+        )
+
+
+class GrowingUnrelatedRetriever(InMemoryHybridRetriever):
+    def __init__(self, chunks: list[KBChunk]) -> None:
+        super().__init__(chunks)
+        self.search_count = 0
+
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        filters: dict[str, Any] | None = None,
+        order_by: list[str] | None = None,
+        order_mode: Any = "relevance",
+    ) -> list[SearchResult]:
+        del query, top_k, filters, order_by, order_mode
+        self.search_count += 1
+        source = next(
+            chunk
+            for chunk in self.chunks
+            if chunk.doc_id == "doc_milvus_release_notes"
+            and chunk.doc_version == "v3.0"
+        )
+        chunk = replace(
+            source,
+            doc_id=f"doc_unrelated_{self.search_count}",
+            chunk_id=f"chunk_unrelated_{self.search_count}",
+            section=f"Unrelated {self.search_count}",
+            text="alpha beta",
+            text_summary=None,
+            checksum=f"checksum-{self.search_count}",
+        )
+        return [
+            SearchResult(
+                chunk=chunk,
+                rank=1,
+                dense_score=0.05,
+                keyword_score=0.0,
+                recency_score=0.0,
+                priority_score=0.0,
+                hybrid_score=0.05,
+            )
+        ]
+
 
 class WorkflowTests(unittest.TestCase):
+    @staticmethod
+    def _release_chunks() -> list[KBChunk]:
+        return ingest_demo_sources(
+            Path("demo/sample_data/local_docs"),
+            Path("demo/sample_data/mock_s3"),
+        ).kb_chunks
+
     def test_workflow_injects_selected_context_into_answer_generator(
         self,
     ) -> None:
@@ -101,6 +255,355 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertEqual(response["answer_generator_name"], "openai")
         self.assertEqual(response["answer_model"], "configured-model")
+
+    def test_reranker_processes_the_complete_recall_pool(self) -> None:
+        chunks = [
+            chunk for chunk in load_kb_chunks() if chunk.is_current
+        ][:12]
+        recalled = [
+            SearchResult(
+                chunk=chunk,
+                rank=index,
+                dense_score=0.9,
+                keyword_score=0.9,
+                recency_score=1.0,
+                priority_score=1.0,
+                hybrid_score=0.9 - index / 1000,
+            )
+            for index, chunk in enumerate(chunks, start=1)
+        ]
+        reranker = RecordingReranker()
+        recalled_count = len(recalled)
+
+        response = AgenticRAGWorkflow(
+            retriever=StaticRetriever(recalled),
+            reranker=reranker,
+        ).run("Milvus 如何检索？")
+
+        self.assertGreater(recalled_count, 8)
+        self.assertEqual(reranker.input_counts, [recalled_count])
+        self.assertEqual(
+            response["trace"]["reranker"]["processed_candidates"],
+            recalled_count,
+        )
+        self.assertEqual(len(response["reranked"]), 8)
+
+    def test_exhaustive_release_query_expands_and_keeps_all_siblings(
+        self,
+    ) -> None:
+        ingestion = ingest_demo_sources(
+            Path("demo/sample_data/local_docs"),
+            Path("demo/sample_data/mock_s3"),
+        )
+        release_ids = {
+            chunk.chunk_id
+            for chunk in ingestion.kb_chunks
+            if chunk.doc_id == "doc_milvus_release_notes"
+            and chunk.doc_version == "v3.0"
+        }
+
+        response = AgenticRAGWorkflow(
+            retriever=InMemoryHybridRetriever(ingestion.kb_chunks)
+        ).run("Milvus 3.0 有哪些新功能？")
+
+        recalled = {
+            item["chunk_id"] for item in response["milvus_recalled"]
+        }
+        reranked = {item["chunk_id"] for item in response["reranked"]}
+        selected = {
+            item["chunk_id"]
+            for item in response["reranked"]
+            if item["selected"]
+        }
+        self.assertEqual(len(release_ids), 12)
+        self.assertTrue(release_ids.issubset(recalled))
+        self.assertTrue(release_ids.issubset(reranked))
+        self.assertTrue(release_ids.issubset(selected))
+        self.assertEqual(response["retrieval_goal"], "exhaustive")
+        self.assertEqual(response["retry_count"], 0)
+        self.assertEqual(
+            response["document_expansions"][0]["result_count"],
+            12,
+        )
+
+    def test_focused_force_merge_accepts_one_strong_direct_chunk(
+        self,
+    ) -> None:
+        chunks = self._release_chunks()
+        response = AgenticRAGWorkflow(
+            retriever=InMemoryHybridRetriever(chunks),
+            reranker=SectionScoreReranker(
+                section_scores={"Force Merge": 0.95}
+            ),
+        ).run("介绍下 Milvus 3.0 Force Merge 功能是什么？")
+
+        self.assertEqual(response["terminal_status"], "answered")
+        self.assertEqual(response["retry_count"], 0)
+        self.assertEqual(response["version_scope"]["mode"], "exact")
+        self.assertEqual(response["version_scope"]["doc_versions"], ["v3.0"])
+        self.assertEqual(response["evidence_grade"]["relevant_chunks"], 1)
+        self.assertEqual(
+            response["evidence_grade"]["evidence_basis"],
+            "single_strong_chunk",
+        )
+        self.assertEqual(len(response["citations"]), 1)
+        self.assertEqual(response["citations"][0]["section"], "Force Merge")
+        self.assertIn(
+            "doc_milvus_release_notes_v3_0",
+            response["citations"][0]["chunk_id"],
+        )
+
+    def test_force_merge_followup_uses_live_evidence_without_memory(
+        self,
+    ) -> None:
+        chunks = self._release_chunks()
+
+        def build() -> AgenticRAGWorkflow:
+            return AgenticRAGWorkflow(
+                retriever=InMemoryHybridRetriever(chunks),
+                reranker=SectionScoreReranker(
+                    section_scores={"Force Merge": 0.95}
+                ),
+            )
+
+        standalone = build().run(
+            "介绍下 Milvus 3.0 Force Merge 功能是什么？",
+            session_id="session_force_standalone",
+        )
+        followup_workflow = build()
+        followup_workflow.run(
+            "Milvus 3.0 有哪些新功能？",
+            session_id="session_force_followup",
+        )
+        followup = followup_workflow.run(
+            "介绍下 Milvus 3.0 Force Merge 功能是什么？",
+            session_id="session_force_followup",
+        )
+
+        self.assertEqual(followup["terminal_status"], "answered")
+        self.assertEqual(followup["memory_recall_decision"], "skipped")
+        self.assertTrue(followup["tool_calls"])
+        self.assertEqual(
+            [item["chunk_id"] for item in followup["citations"]],
+            [item["chunk_id"] for item in standalone["citations"]],
+        )
+        self.assertEqual(followup["answer"], standalone["answer"])
+
+    def test_weak_single_chunk_and_single_chunk_exhaustive_still_abstain(
+        self,
+    ) -> None:
+        force_merge = next(
+            chunk
+            for chunk in self._release_chunks()
+            if chunk.section == "Force Merge"
+        )
+        result = SearchResult(
+            chunk=force_merge,
+            rank=1,
+            dense_score=0.9,
+            keyword_score=0.9,
+            recency_score=1.0,
+            priority_score=1.0,
+            hybrid_score=0.9,
+        )
+
+        weak = AgenticRAGWorkflow(
+            retriever=StaticRetriever([result]),
+            reranker=SectionScoreReranker(
+                section_scores={"Force Merge": 0.79}
+            ),
+        ).run("介绍下 Milvus 3.0 Force Merge 功能是什么？")
+        exhaustive = AgenticRAGWorkflow(
+            retriever=StaticRetriever([result]),
+            reranker=SectionScoreReranker(
+                section_scores={"Force Merge": 0.95}
+            ),
+        ).run("Milvus 3.0 有哪些新功能？")
+
+        self.assertEqual(weak["terminal_status"], "abstained")
+        self.assertIn(
+            "single_weak_chunk",
+            weak["evidence_grade"]["missing_aspects"],
+        )
+        self.assertEqual(exhaustive["terminal_status"], "abstained")
+        self.assertIn(
+            "incomplete_exhaustive_coverage",
+            exhaustive["evidence_grade"]["missing_aspects"],
+        )
+
+    def test_single_strong_chunk_does_not_answer_multi_aspect_question(
+        self,
+    ) -> None:
+        force_merge = next(
+            chunk
+            for chunk in self._release_chunks()
+            if chunk.section == "Force Merge"
+        )
+        result = SearchResult(
+            chunk=force_merge,
+            rank=1,
+            dense_score=0.9,
+            keyword_score=0.9,
+            recency_score=1.0,
+            priority_score=1.0,
+            hybrid_score=0.9,
+        )
+        response = AgenticRAGWorkflow(
+            retriever=StaticRetriever([result]),
+            reranker=SectionScoreReranker(
+                section_scores={"Force Merge": 0.95}
+            ),
+        ).run(
+            "Milvus 3.0 Force Merge 是什么、如何使用、有什么限制？"
+        )
+
+        self.assertEqual(response["terminal_status"], "abstained")
+        self.assertIn(
+            "multi_aspect_requires_coverage",
+            response["evidence_grade"]["missing_aspects"],
+        )
+
+    def test_multi_chunk_evidence_must_cover_every_selected_tool(
+        self,
+    ) -> None:
+        workflow = AgenticRAGWorkflow()
+        chunks = [
+            chunk
+            for chunk in load_kb_chunks()
+            if chunk.doc_id == "doc_milvus_feature_map"
+        ]
+        search_results = [
+            SearchResult(
+                chunk=chunk,
+                rank=index,
+                dense_score=0.9,
+                keyword_score=0.9,
+                recency_score=1.0,
+                priority_score=1.0,
+                hybrid_score=0.9,
+            )
+            for index, chunk in enumerate(chunks, start=1)
+        ]
+        state = workflow.create_state("Milvus retrieval")
+        state.selected_tools = [
+            "search_code_docs",
+            "search_product_docs",
+        ]
+        state.query_plan = [
+            {
+                "subquery_id": "sq1",
+                "tool": "search_code_docs",
+                "query": state.user_query,
+                "depends_on": [],
+                "status": "completed",
+                "round": 0,
+                "version_scope": {"mode": "current"},
+            },
+            {
+                "subquery_id": "sq2",
+                "tool": "search_product_docs",
+                "query": state.user_query,
+                "depends_on": [],
+                "status": "completed",
+                "round": 0,
+                "version_scope": {"mode": "current"},
+            },
+        ]
+        state.retrieved_chunks = search_results
+        state.reranked_chunks = [
+            RerankedResult(
+                search_result=result,
+                rerank=index,
+                old_rank=result.rank,
+                rerank_score=0.9,
+            )
+            for index, result in enumerate(search_results, start=1)
+        ]
+        result_ids = [result.chunk.chunk_id for result in search_results]
+        state.tool_calls = [
+            {
+                "tool": "search_code_docs",
+                "result_chunk_ids": result_ids,
+            }
+        ]
+        state.retrieval_provenance = {
+            chunk_id: [{"tool": "search_code_docs", "subquery_id": "sq1"}]
+            for chunk_id in result_ids
+        }
+
+        workflow.grade_evidence(state)
+
+        self.assertFalse(state.enough_evidence)
+        self.assertIn(
+            "tool:search_product_docs",
+            state.evidence_grade["missing_aspects"],
+        )
+        self.assertNotIn(
+            "single_indirect_chunk",
+            state.evidence_grade["missing_aspects"],
+        )
+
+        direct_result = search_results[1]
+        state.user_query = "Milvus Force Merge"
+        state.retrieved_chunks = [direct_result]
+        state.reranked_chunks = [
+            RerankedResult(
+                search_result=direct_result,
+                rerank=1,
+                old_rank=direct_result.rank,
+                rerank_score=0.9,
+            )
+        ]
+        state.tool_calls[0]["result_chunk_ids"] = [
+            direct_result.chunk.chunk_id
+        ]
+        state.retrieval_provenance = {
+            direct_result.chunk.chunk_id: [
+                {"tool": "search_code_docs", "subquery_id": "sq1"}
+            ]
+        }
+
+        workflow.grade_evidence(state)
+
+        self.assertIn(
+            "tool:search_product_docs",
+            state.evidence_grade["missing_aspects"],
+        )
+        self.assertNotIn(
+            "single_indirect_chunk",
+            state.evidence_grade["missing_aspects"],
+        )
+
+    def test_retry_preserves_terms_and_stops_before_duplicate_plan(
+        self,
+    ) -> None:
+        question = "介绍下 Milvus 3.0 Force Merge 功能是什么？"
+        response = AgenticRAGWorkflow(
+            retriever=GrowingUnrelatedRetriever(self._release_chunks()),
+            reranker=SectionScoreReranker(),
+        ).run(question)
+
+        self.assertEqual(response["terminal_status"], "abstained")
+        self.assertEqual(response["retry_count"], 1)
+        self.assertEqual(len(response["tool_calls"]), 2)
+        retry_queries = [
+            item["query"]
+            for item in response["query_plan"]
+            if item["round"] > 0
+        ]
+        self.assertEqual(len(retry_queries), 1)
+        self.assertIn(question, retry_queries[0])
+        self.assertIn("Milvus 3.0", retry_queries[0])
+        self.assertIn("Force Merge", retry_queries[0])
+        self.assertNotIn("S3 ingestion pipeline", retry_queries[0])
+        self.assertEqual(
+            response["evidence_grade"]["stop_reason"],
+            "duplicate_retry_query",
+        )
+        self.assertIn(
+            "no_relevant_evidence",
+            response["evidence_grade"]["missing_aspects"],
+        )
 
     def test_terminal_branches_without_evidence_do_not_call_generator(
         self,
@@ -223,19 +726,100 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("doc_ttl_memory_policy_c001", cited)
         self.assertLessEqual(len(cited), 5)
 
-    def test_unknown_question_stops_at_retry_cap(self) -> None:
+    def test_unknown_question_stops_within_retry_cap(self) -> None:
         response = AgenticRAGWorkflow().run(
             "这个完全不存在的采购审批宇宙飞船编号是什么？"
         )
 
         self.assertFalse(response["enough_evidence"])
-        self.assertEqual(response["retry_count"], 3)
+        self.assertLessEqual(response["retry_count"], 3)
         self.assertIn("没有找到足够可靠", response["answer"])
         self.assertEqual(response["citations"], [])
         self.assertEqual(response["terminal_status"], "abstained")
         self.assertEqual(response["trace"]["terminal_status"], "abstained")
         grade = response["trace"]["evidence_grading"]
-        self.assertEqual(grade["retry_count"], 3)
+        self.assertEqual(grade["retry_count"], response["retry_count"])
+
+    def test_unchanged_candidate_pool_stops_before_another_rerank(self) -> None:
+        unrelated = [
+            SearchResult(
+                chunk=chunk,
+                rank=index,
+                dense_score=0.5,
+                keyword_score=0.0,
+                recency_score=1.0,
+                priority_score=1.0,
+                hybrid_score=0.5 - index / 100,
+            )
+            for index, chunk in enumerate(load_kb_chunks()[:3], start=1)
+        ]
+        reranker = RecordingReranker()
+
+        response = AgenticRAGWorkflow(
+            retriever=StaticRetriever(unrelated),
+            reranker=reranker,
+        ).run("不存在的采购审批宇宙飞船编号是什么？")
+
+        self.assertEqual(response["terminal_status"], "abstained")
+        self.assertEqual(response["retry_count"], 1)
+        self.assertEqual(reranker.input_counts, [3])
+        self.assertEqual(
+            response["evidence_grade"]["stop_reason"],
+            "no_progress",
+        )
+
+    def test_new_tool_provenance_counts_as_candidate_progress(self) -> None:
+        results = [
+            SearchResult(
+                chunk=chunk,
+                rank=index,
+                dense_score=0.5,
+                keyword_score=0.0,
+                recency_score=1.0,
+                priority_score=1.0,
+                hybrid_score=0.5 - index / 100,
+            )
+            for index, chunk in enumerate(load_kb_chunks()[:2], start=1)
+        ]
+        workflow = AgenticRAGWorkflow(retriever=StaticRetriever(results))
+        state = workflow.create_state("跨域比较")
+        state.permission_decision = {
+            "allowed": True,
+            "allowed_departments": [
+                "engineering",
+                "product",
+            ],
+        }
+        state.query_plan = [
+            {
+                "subquery_id": "sq1",
+                "tool": "search_code_docs",
+                "query": "same evidence",
+                "depends_on": [],
+                "status": "pending",
+                "round": 0,
+                "version_scope": {"mode": "current"},
+            }
+        ]
+
+        workflow.milvus_hybrid_retrieve(state)
+        first = state.candidate_pool_fingerprint
+        state.retry_count = 1
+        state.query_plan.append(
+            {
+                "subquery_id": "retry1",
+                "tool": "search_product_docs",
+                "query": "same evidence",
+                "depends_on": [],
+                "status": "pending",
+                "round": 1,
+                "version_scope": {"mode": "current"},
+            }
+        )
+        workflow.milvus_hybrid_retrieve(state)
+
+        self.assertNotEqual(state.candidate_pool_fingerprint, first)
+        self.assertFalse(state.candidate_pool_unchanged)
 
     def test_general_question_preserves_direct_response(self) -> None:
         response = AgenticRAGWorkflow().run("你好")
@@ -261,8 +845,232 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(response["trace"]["session_id"], "session_test")
         self.assertEqual(response["trace"]["query_id"], "query_test")
         stages = response["metrics"]["stage_latency_ms"]
-        self.assertIn("milvus_hybrid_retrieve", stages)
+        self.assertIn("execute_tool_plan", stages)
+        self.assertIn("classify_and_route", stages)
+        self.assertIn("plan_retrieval", stages)
+        self.assertIn("evaluate_evidence", stages)
+        for removed_stage in (
+            "classify_query",
+            "decide_retrieval",
+            "select_tools",
+            "rewrite_query",
+            "grade_evidence",
+            "prepare_supplementary_retrieval",
+        ):
+            self.assertNotIn(removed_stage, stages)
         self.assertGreaterEqual(response["metrics"]["latency_ms"], 0)
+
+    def test_composite_planning_stages_return_typed_results(self) -> None:
+        workflow = AgenticRAGWorkflow()
+        direct_state = workflow.create_state("你好")
+        direct = workflow.classify_and_route(direct_state)
+
+        self.assertIsInstance(direct, QueryRouteResult)
+        self.assertIs(direct.route, QueryRoute.DIRECT)
+        self.assertEqual(
+            direct_state.terminal_status,
+            "answered_without_retrieval",
+        )
+
+        retrieval_state = workflow.create_state("Milvus 3.0 有哪些新功能")
+        route = workflow.classify_and_route(retrieval_state)
+        workflow.resolve_terminology(retrieval_state)
+        workflow.check_permission(retrieval_state)
+        plan = workflow.plan_retrieval(retrieval_state)
+
+        self.assertIs(route.route, QueryRoute.RETRIEVAL)
+        self.assertIsInstance(plan, RetrievalPlanResult)
+        self.assertGreaterEqual(plan.plan_count, 1)
+        self.assertEqual(plan.selected_tools, tuple(retrieval_state.selected_tools))
+
+    def test_independent_searches_parallelize_only_with_adapter_capability(
+        self,
+    ) -> None:
+        class BarrierRetriever(InMemoryHybridRetriever):
+            supports_parallel_search = True
+
+            def __init__(self, chunks: list[KBChunk]) -> None:
+                super().__init__(chunks)
+                self.barrier = Barrier(2)
+
+            def search(
+                self,
+                query: str,
+                *,
+                top_k: int,
+                filters: dict[str, Any] | None = None,
+                order_by: list[str] | None = None,
+                order_mode: Any = "relevance",
+            ) -> list[SearchResult]:
+                self.barrier.wait(timeout=2)
+                return super().search(
+                    query,
+                    top_k=top_k,
+                    filters=filters,
+                    order_by=order_by,
+                    order_mode=order_mode,
+                )
+
+        workflow = AgenticRAGWorkflow(
+            retriever=BarrierRetriever(load_kb_chunks())
+        )
+        item = workflow.create_state("比较工程架构和产品路线图")
+        item.permission_decision = {
+            "allowed": True,
+            "allowed_departments": [
+                "engineering",
+                "product",
+                "hr",
+                "security",
+                "general",
+            ],
+        }
+        item.query_plan = [
+            {
+                "subquery_id": "sq1",
+                "tool": "search_code_docs",
+                "query": "engineering architecture",
+                "depends_on": [],
+                "status": "pending",
+                "round": 0,
+                "version_scope": {"mode": "current"},
+            },
+            {
+                "subquery_id": "sq2",
+                "tool": "search_product_docs",
+                "query": "product roadmap",
+                "depends_on": [],
+                "status": "pending",
+                "round": 0,
+                "version_scope": {"mode": "current"},
+            },
+        ]
+
+        workflow.milvus_hybrid_retrieve(item)
+
+        self.assertEqual(item.retrieval_execution_mode, "parallel")
+        self.assertEqual(
+            [call["subquery_id"] for call in item.tool_calls],
+            ["sq1", "sq2"],
+        )
+
+    def test_parallel_worker_failure_is_attributed_to_tool_plan_stage(
+        self,
+    ) -> None:
+        class PartiallyFailingRetriever(InMemoryHybridRetriever):
+            supports_parallel_search = True
+
+            def search(
+                self,
+                query: str,
+                *,
+                top_k: int,
+                filters: dict[str, Any] | None = None,
+                order_by: list[str] | None = None,
+                order_mode: Any = "relevance",
+            ) -> list[SearchResult]:
+                if query == "product roadmap":
+                    raise OSError("worker unavailable")
+                return super().search(
+                    query,
+                    top_k=top_k,
+                    filters=filters,
+                    order_by=order_by,
+                    order_mode=order_mode,
+                )
+
+        workflow = AgenticRAGWorkflow(
+            retriever=PartiallyFailingRetriever(load_kb_chunks())
+        )
+        item = workflow.create_state(
+            "比较工程架构和产品路线图",
+            query_id="query_parallel_failure",
+        )
+        item.permission_decision = {
+            "allowed": True,
+            "allowed_departments": [
+                "engineering",
+                "product",
+                "hr",
+                "security",
+                "general",
+            ],
+        }
+        item.query_plan = [
+            {
+                "subquery_id": "sq1",
+                "tool": "search_code_docs",
+                "query": "engineering architecture",
+                "depends_on": [],
+                "status": "pending",
+                "round": 0,
+                "version_scope": {"mode": "current"},
+            },
+            {
+                "subquery_id": "sq2",
+                "tool": "search_product_docs",
+                "query": "product roadmap",
+                "depends_on": [],
+                "status": "pending",
+                "round": 0,
+                "version_scope": {"mode": "current"},
+            },
+        ]
+
+        with self.assertRaisesRegex(
+            WorkflowStageError,
+            "execute_tool_plan.*query_parallel_failure",
+        ) as captured:
+            workflow._measure_stage(
+                item,
+                "execute_tool_plan",
+                lambda: workflow.milvus_hybrid_retrieve(item),
+            )
+
+        self.assertEqual(item.retrieval_execution_mode, "parallel")
+        self.assertIsInstance(captured.exception.__cause__, OSError)
+
+    def test_dependent_search_plan_remains_sequential(self) -> None:
+        workflow = AgenticRAGWorkflow()
+        item = workflow.create_state("比较工程架构和产品路线图")
+        item.permission_decision = {
+            "allowed": True,
+            "allowed_departments": [
+                "engineering",
+                "product",
+                "hr",
+                "security",
+                "general",
+            ],
+        }
+        item.query_plan = [
+            {
+                "subquery_id": "sq1",
+                "tool": "search_code_docs",
+                "query": "engineering architecture",
+                "depends_on": [],
+                "status": "pending",
+                "round": 0,
+                "version_scope": {"mode": "current"},
+            },
+            {
+                "subquery_id": "sq2",
+                "tool": "search_product_docs",
+                "query": "product roadmap",
+                "depends_on": ["sq1"],
+                "status": "pending",
+                "round": 0,
+                "version_scope": {"mode": "current"},
+            },
+        ]
+
+        workflow.milvus_hybrid_retrieve(item)
+
+        self.assertEqual(item.retrieval_execution_mode, "sequential")
+        self.assertEqual(
+            [call["subquery_id"] for call in item.tool_calls],
+            ["sq1"],
+        )
 
     def test_citations_are_inline_and_selected(self) -> None:
         response = AgenticRAGWorkflow().run(
@@ -301,6 +1109,7 @@ class WorkflowTests(unittest.TestCase):
                 top_k: int,
                 filters: dict[str, Any] | None = None,
                 order_by: list[str] | None = None,
+                order_mode: Any = "relevance",
             ) -> list[SearchResult]:
                 raise OSError("Milvus unavailable")
 
@@ -308,10 +1117,51 @@ class WorkflowTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             WorkflowStageError,
-            "milvus_hybrid_retrieve.*query_failure",
+            "execute_tool_plan.*query_failure",
         ) as captured:
             workflow.run("Milvus 架构", query_id="query_failure")
         self.assertIsInstance(captured.exception.__cause__, OSError)
+
+    def test_terminal_persistence_sinks_remain_sequential(self) -> None:
+        sink_order: list[str] = []
+
+        class RecordingMemoryStore(ConversationMemoryStore):
+            def upsert_turn(self, records: list[MemoryRecord]) -> int:
+                sink_order.append("conversation_memory")
+                return super().upsert_turn(records)
+
+        class RecordingWorkflow(AgenticRAGWorkflow):
+            def _persist_selective_memory(
+                self,
+                state: AgentState,
+                *,
+                now_ms: int,
+            ) -> None:
+                sink_order.append("selective_memory")
+                super()._persist_selective_memory(state, now_ms=now_ms)
+
+            def _persist_response_cache(
+                self,
+                state: AgentState,
+                *,
+                now_ms: int,
+            ) -> None:
+                sink_order.append("response_cache")
+                super()._persist_response_cache(state, now_ms=now_ms)
+
+        response = RecordingWorkflow(
+            memory_store=RecordingMemoryStore()
+        ).run("Milvus 3.0 有哪些新功能")
+
+        self.assertEqual(response["terminal_status"], "answered")
+        self.assertEqual(
+            sink_order,
+            [
+                "conversation_memory",
+                "selective_memory",
+                "response_cache",
+            ],
+        )
 
     def test_default_adapter_streams_then_returns_same_snapshot(self) -> None:
         events = list(

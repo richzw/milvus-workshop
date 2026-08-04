@@ -17,7 +17,11 @@ if str(SOURCE_ROOT) not in sys.path:
 from agent_workshop_demo.schema.collections import (
     CONVERSATION_MEMORY_COLLECTION,
     DOC_DEDUP_SIGNATURES_COLLECTION,
+    GROUNDED_RESPONSE_CACHE_COLLECTION,
     KB_CHUNKS_COLLECTION,
+    MEMORY_EVENTS_COLLECTION,
+    MEMORY_FACTS_COLLECTION,
+    MEMORY_CONSOLIDATION_JOURNAL_COLLECTION,
 )
 from agent_workshop_demo.schema.pymilvus_adapter import create_collections
 
@@ -52,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     schemas = [
         KB_CHUNKS_COLLECTION,
         CONVERSATION_MEMORY_COLLECTION,
+        MEMORY_EVENTS_COLLECTION,
+        MEMORY_FACTS_COLLECTION,
+        MEMORY_CONSOLIDATION_JOURNAL_COLLECTION,
+        GROUNDED_RESPONSE_CACHE_COLLECTION,
         DOC_DEDUP_SIGNATURES_COLLECTION,
     ]
     if args.dry_run:

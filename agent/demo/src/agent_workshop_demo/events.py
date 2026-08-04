@@ -18,33 +18,66 @@ SAFE_DETAIL_FIELDS = frozenset(
         "allowed_department_count",
         "ambiguity_count",
         "candidate_count",
+        "candidate_pool_status",
+        "cache_candidate_count",
+        "cache_match_type",
+        "cache_similarity",
+        "cache_status",
         "citation_count",
+        "classifier_name",
+        "confidence",
         "context_count",
         "doc_version",
+        "document_expansion_count",
+        "decay_mode",
+        "decay_profiles",
+        "durable_fact_count",
         "enough_evidence",
+        "evidence_basis",
+        "execution_mode",
         "fallback_reason",
+        "fallback_only_count",
         "generator_name",
         "intent",
         "matched_entity_count",
         "memory_status",
         "memory_types",
+        "recall_decision",
+        "recall_mode",
+        "recall_reason",
+        "requested_count",
+        "selective_memory_status",
+        "selective_written_count",
+        "selection_reasons",
+        "selector_name",
         "missing_aspects",
         "mode",
         "model",
         "need_retrieval",
+        "next_action",
         "plan_count",
+        "primary_attempt_count",
         "query_type",
+        "retrieval_goal",
+        "route",
         "relevant_count",
+        "retention_class",
         "result_count",
         "recalled_count",
         "retry_count",
         "round",
         "selected_tools",
+        "sticky_fallback_reason",
+        "stop_reason",
         "tool",
         "ttl_seconds",
+        "consolidation_status",
+        "conflict_count",
+        "episode_candidate_count",
         "valid",
         "version_mode",
         "written_count",
+        "working_state_count",
     }
 )
 
@@ -66,10 +99,7 @@ def details_are_safe(details: object) -> bool:
         if (
             isinstance(value, list)
             and len(value) <= 16
-            and all(
-                isinstance(item, str) and len(item) <= 120
-                for item in value
-            )
+            and all(isinstance(item, str) and len(item) <= 120 for item in value)
         ):
             continue
         return False
@@ -106,13 +136,9 @@ class WorkflowEvent:
         if not self.stage.strip():
             raise ValueError("Workflow event stage must be non-empty")
         if not self.title.strip() or len(self.title) > 80:
-            raise ValueError(
-                "Workflow event title must contain 1 to 80 characters"
-            )
+            raise ValueError("Workflow event title must contain 1 to 80 characters")
         if not self.summary.strip() or len(self.summary) > 300:
-            raise ValueError(
-                "Workflow event summary must contain 1 to 300 characters"
-            )
+            raise ValueError("Workflow event summary must contain 1 to 300 characters")
         if self.elapsed_ms is not None and (
             self.elapsed_ms < 0 or not isfinite(self.elapsed_ms)
         ):

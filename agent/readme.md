@@ -1,6 +1,6 @@
 # Milvus 3.0 Agentic RAG Workshop
 
-这是一个可以运行、观察和评测的 Agentic RAG Workshop。项目以“企业内部知识助手”为场景，把本地文档和模拟 S3 数据导入 Milvus，通过 LangGraph 编排问题理解、工具选择、混合检索、证据评估、答案校验和多轮 Memory，并在 Streamlit 中动态展示整个 Agent 执行过程。
+这是一个可以运行、观察和评测的 Agentic RAG Workshop。项目以“企业内部知识助手”为场景，把本地文档和模拟 S3 数据导入 Milvus，通过共享的 Local/LangGraph transition contract 编排问题理解、权限与 grounded cache、工具计划、混合检索、证据评估、答案校验和多层 Memory，并在 Streamlit 中动态展示整个 Agent 执行过程。
 
 它适合第一次接触 RAG、Milvus 或 Agent workflow 的开发者，也适合希望把传统 `retrieve → generate` 流程升级为可追踪、可重试、带引用的 Agentic RAG 的工程师。
 
@@ -11,27 +11,32 @@ Workshop 最终产物是一个具备以下界面的知识问答应用：
 - **Chat**：连续多轮问答和经过校验的答案；
 - **Evidence**：Milvus 召回结果、Rerank 结果、引用和文档版本；
 - **Agent Trace**：动态展示意图识别、工具调用、重试、证据评估等步骤；
-- **Memory**：展示当前 session 的召回、写入、TTL 和清除状态。
+- **Memory**：展示当前 session 的召回、写入、TTL、Selective Memory 分布、opaque lineage 和清除状态。
 
 完整流程图见 [`flow.md`](./flow.md)。
 
 ```text
 用户问题
-  → Session Memory 召回
-  → Intent / Query Type 分类
-  → 专业术语与文档版本解析
+  → Validate Request / Detect Query Directive
+  → Session Context Recall
+  → Classify and Route
+  → Entity / Version Resolution
   → Permission Check
-  → Tool Selection
-  → Query Rewrite / Decompose
-  → Milvus Hybrid Retrieval
-  → Merge / Rerank / Evidence Grading
-  → 不足时补充检索，达到上限则 Abstain
-  → Answer Generation
-  → Citation / Version Self-check
-  → Streaming Answer
-  → Persist Turn Memory
-  → Final Snapshot
+  → Try Grounded Cache
+  → Recall Authorized Experience
+  → Plan Retrieval
+  → Execute Tool Plan
+  → Candidate Fingerprint / Rerank / Evaluate Evidence
+  → Answer，或执行唯一的 Retry Plan，或安全 Abstain
+  → Generate Candidate / Verify Answer
+  → Output Gate
+  → Validated Streaming
+  → Persist Terminal Turn / Finalize
 ```
+
+Local runtime 与 LangGraph runtime 对条件分支使用同一个 closed transition
+contract；`classify_and_route`、`plan_retrieval` 和 `evaluate_evidence` 分别把
+分类与路由、工具选择与改写、证据评分与下一步决策合并为 typed stage。
 
 ## 主要功能
 
@@ -41,10 +46,17 @@ Workshop 最终产物是一个具备以下界面的知识问答应用：
 
 - 判断是普通对话、内部知识、版本比较、操作请求还是 Memory 请求；
 - 在搜索私有知识前执行演示用 Permission Check；
-- 从 policy、product、meeting、code 等知识工具中选择最小相关集合；
-- 将复杂问题拆成最多三个有依赖关系的 subqueries；
-- 支持并行对比和基于第一跳证据继续检索的 multi-hop 流程；
-- 对证据覆盖度进行评分，缺失时最多执行三轮定向补充检索；
+- Permission 通过后先尝试 fail-closed Grounded Response Cache；只有当前权限、
+  query constraints、KB revision 和 live citation evidence 都有效才会短路 RAG；
+- Cache miss 后按当前 permission scope 召回可复用 experience，但它只能作为
+  planning hint，不能直接回答；
+- 从 policy、product、meeting、code 等知识工具中选择最小相关集合，并将
+  Tool Selection 与 Query Rewrite / Decompose 合并成一个 bounded plan；
+- 将复杂问题拆成最多三个有依赖关系的 subqueries；独立读取只有在 adapter
+  显式声明并发安全时才 bounded parallel，默认保持 deterministic sequential；
+- 对证据覆盖度进行评分；缺失时最多执行三轮真正有进展的定向补充检索；
+- 用 candidate-pool fingerprint 提前终止无进展检索，用 retry-plan fingerprint
+  在工具执行前阻止重复补充 query；
 - 证据仍不足时明确 abstain，不用模型补全未知事实。
 
 ### 2. 专业术语理解
@@ -70,7 +82,7 @@ Entity 在 query rewrite 和生成 prompt 中帮助理解问题，但不能作�
 - `is_current`
 - `chunk_id`
 
-默认问题只检索当前版本；指定版本只检索对应 edition；只有明确的版本比较才允许同时使用多个版本。版本信息会一直保留到 Evidence、Citation 和最终答案，避免不同版本内容交叉显示。
+默认问题只检索当前版本；指定版本只检索对应 edition；只有明确的版本比较才允许同时使用多个版本。Allow-listed product-associated bare version 也会精确解析，例如 `Milvus 3.0` 会归一化为 stored `v3.0`，而无产品上下文的裸 `3.0` 不会被误判为版本。版本信息会一直保留到 Tool Plan、Evidence、Citation 和最终答案，避免不同版本内容交叉显示。
 
 ### 4. Milvus Hybrid Retrieval
 
@@ -80,6 +92,7 @@ Milvus-backed 路径组合使用：
 - Sparse/BM25：产品名、错误码和专业词精确匹配；
 - Metadata filters：部门、文档类型、当前版本等范围约束；
 - 多工具结果合并和 `chunk_id` 去重；
+- Exhaustive query 的 bounded document sibling expansion；
 - Reranker：重新计算相关性并选择生成上下文。
 
 本地 CLI 和测试提供 deterministic fallback，不需要 Milvus 或 API key；Streamlit 使用真实 Milvus collection。
@@ -88,7 +101,15 @@ Milvus-backed 路径组合使用：
 
 检索到 Top-K 并不代表可以直接回答。生成前后还会执行：
 
-- Evidence coverage 检查；
+- Evidence coverage 检查，并记录
+  `single_strong_chunk | multi_chunk_coverage | insufficient_evidence`；
+- 对 focused、单一命名功能，允许一条 score `≥0.80`、section 直接命中、
+  单工具/单方面、版本匹配且无冲突的 live chunk 回答；
+- Comparison、exhaustive、multi-aspect 和 multi-tool 问题仍要求完整的
+  multi-evidence、tool 与 version coverage；
+- 缺失证据使用 `single_weak_chunk`、`single_indirect_chunk`、
+  `multi_aspect_requires_coverage`、`tool:<name>`、`version:<scope>` 等真实
+  reason code 驱动 retry，而不是泛化的“需要更多引用”；
 - Selected context 上限控制；
 - `[C1]`、`[C2]` 等 request-local citation 映射；
 - Citation 是否来自本轮 selected chunks 的检查；
@@ -99,7 +120,16 @@ Milvus-backed 路径组合使用：
 
 ### 6. 多轮 Agent Memory
 
-每个成功完成的 turn 可以写入：
+当前 Memory 由三个边界清晰的部分组成：
+
+- **Conversation Memory**：处理同 session 的最近问题、语义 follow-up 与显式
+  “请记住……”；
+- **Selective Memory**：记录 episodes，经 Selection Gate 和 consolidation
+  形成 working state、durable facts 与 conflicts，并保留 append-only lineage；
+- **Grounded Response Cache**：独立保存经过验证的答案和 citation lineage，
+  它是 sibling performance store，不是 Memory tier。
+
+每个成功完成的 turn 可以写入 Conversation Memory：
 
 - 用户 `short_term`
 - 助手 `short_term`
@@ -114,19 +144,36 @@ Memory 按 `session_id` 隔离，并使用显式 `expires_at` 过滤。它可以
 - 修改 tool-owned filters；
 - 把不足的 KB evidence 变成充分证据。
 
-如果用户中断 stream、没有请求最终结果，本轮内容不会写入 Memory。
+Permission-scoped Selective Experience 只在 Permission 通过且 Grounded Cache
+miss 后召回。上一轮答案或 Memory value 最多帮助 query rewrite；当前知识问题
+仍必须 fetch、rerank、select 并验证 live KB chunks。
+
+Conversation Memory、Selective Memory 与 Grounded Response Cache 是三个
+logical persistence sinks。当前实现顺序写入；在 adapter 未证明 thread safety、
+deterministic failure precedence 和 cancellation semantics 前不会并行写。
+如果用户中断 stream、没有请求最终结果，本轮内容不会写入这些 terminal sinks。
+
+Memory tab 将上述状态拆成三个可观察区域：
+
+- **Live records in this session**：最多展示 200 条 active-session live records，
+  用于核对 role、memory type、retention、selector metadata 与生命周期；
+- **Retention and selection distributions**：聚合 retention class、selection
+  reason、record kind 和 status，只展示计数而不暴露 vectors；
+- **Complete opaque lineage**：用 event/fact/supersession/parent 的 opaque ids
+  展示完整可追溯关系，不渲染被清除的 payload。
 
 ### 7. 可观察的 Agent Trace
 
 UI 会动态展示经过脱敏的执行事件，包括：
 
 - Memory recall 状态；
-- Intent 和 Query Type；
+- Classify/route 的 Intent、Query Type 与 Retrieval Goal；
 - Entity 与版本解析；
 - Permission decision；
+- Grounded Cache 命中/失效和 Authorized Experience recall；
 - Tool selection 和 tool calls；
-- Retrieval、Rerank 和 Evidence Grade；
-- Retry / supplementary retrieval；
+- Execute Tool Plan、candidate progress、Rerank 和 Evidence Basis；
+- Retry / supplementary retrieval、missing aspects 和 stop reason；
 - Generation 和 Citation verification；
 - 各阶段耗时与最终状态。
 
@@ -138,12 +185,14 @@ Workshop 不只是调用一次 vector search，而是用完整数据链路理解
 
 | 主题 | Workshop 中的实践 |
 | --- | --- |
-| Collection schema | 创建 `kb_chunks`、`conversation_memory` 和 `doc_dedup_signatures` |
+| Collection schema | 创建 KB、Conversation/Selective Memory、consolidation journal、grounded cache 和 dedup collections |
 | Dense + Sparse | 组合语义检索和 BM25/Sparse 检索 |
 | Nullable vector | `image_vector` 可为空，为多模态知识对象预留空间 |
 | Scalar filter | 按部门、文档类型、版本和当前 edition 约束结果 |
 | Vector/scalar index | 通过独立脚本创建并验证索引 |
 | Conversation Memory | 使用向量召回、session filter 和显式 TTL |
+| Selective Memory | Episode selection、durable fact projection、conflict、decay 与 opaque lineage |
+| Grounded Response Cache | 复用通过权限、revision 与 citation evidence 校验的历史答案 |
 | Data lifecycle | 安全清理旧 collection、重建 schema、重新导入数据 |
 | Dedup | 生成 checksum 和实验性的 MinHash-style signature |
 | Observability | 将 Milvus recall 与 Rerank、Evidence Grade 分开展示 |
@@ -222,6 +271,15 @@ python -m unittest discover demo/tests -v
 python demo/scripts/run_eval.py
 ```
 
+运行 Min-Max Chunking 配置对比实验：
+
+```bash
+OPENAI_API_KEY='' \
+EMBEDDING_PROVIDER=deterministic \
+IMAGE_EMBEDDING_PROVIDER=deterministic \
+python demo/scripts/run_chunking_experiment.py
+```
+
 ## 运行 Milvus-backed Demo
 
 先复制配置：
@@ -237,8 +295,18 @@ MILVUS_URI=http://localhost:19530
 MILVUS_TOKEN=
 MILVUS_COLLECTION_NAME=kb_chunks
 MILVUS_MEMORY_COLLECTION_NAME=conversation_memory
+MILVUS_MEMORY_EVENTS_COLLECTION_NAME=memory_events
+MILVUS_MEMORY_FACTS_COLLECTION_NAME=memory_facts
+MILVUS_MEMORY_CONSOLIDATION_JOURNAL_COLLECTION_NAME=memory_consolidation_journal
+MILVUS_RESPONSE_CACHE_COLLECTION_NAME=grounded_response_cache
 MEMORY_TOP_K=3
 MEMORY_TTL_SECONDS=86400
+SELECTIVE_MEMORY_ENABLED=true
+MEMORY_DECAY_MODE=application
+RESPONSE_CACHE_ENABLED=true
+RESPONSE_CACHE_TTL_SECONDS=259200
+RESPONSE_CACHE_SIMILARITY_THRESHOLD=0.92
+KB_REVISION=demo-v1
 ```
 
 Milvus 启动后，依次执行：
@@ -260,12 +328,15 @@ python -m streamlit run demo/src/agent_workshop_demo/streamlit_app.py
 推荐测试问题：
 
 ```text
+Milvus 3.0 有哪些新功能？
+介绍下 Milvus 3.0 Force Merge 功能是什么？
 我们 S3 文档同步流程是怎么设计的？
 RAG 架构里 Milvus 负责哪一层？
 领取按钮会把用户带到哪里？
 GO按钮 v1 和 v2 有什么区别？
 请记住我叫张三
 你还记得我叫什么吗？
+查找下我最近的三个问题是什么
 它有哪些步骤？
 ```
 
@@ -275,7 +346,7 @@ GO按钮 v1 和 v2 有什么区别？
 python demo/scripts/cleanup_milvus.py
 ```
 
-确认只包含三个 Workshop collection 后再执行：
+确认只包含脚本列出的固定 Workshop collections 后再执行：
 
 ```bash
 python demo/scripts/cleanup_milvus.py --confirm-drop-demo-data
@@ -309,6 +380,10 @@ Embedding 固定请求 1,024 维以匹配当前 schema。同一个 collection �
 - Streamlit 没有生产级登录和租户隔离；
 - 不应导入真实公司机密、个人数据或生产凭据；
 - Memory TTL、清除和 session isolation 不等同于完整的隐私合规方案；
+- Grounded Cache 与 Selective Memory 仍是 Workshop 级实现，不是生产审计、
+  用户画像或跨 session identity 系统；
+- terminal persistence sinks 当前保持顺序写入，不能据此推断任意 Milvus
+  client 或部署具备并发写安全；
 - deterministic embedding、reranker 和 generator 是可复现 fallback；
 - 真实 Milvus/OpenAI/Zilliz Cloud 部署仍需要独立的安全、容量和性能设计。
 
@@ -316,6 +391,9 @@ Embedding 固定请求 1,024 维以匹配当前 schema。同一个 collection �
 
 - [`specs/index.md`](./specs/index.md)：全部 specs 和阅读顺序；
 - [`specs/10b-conversation-memory.md`](./specs/10b-conversation-memory.md)：多轮 Memory；
+- [`specs/10c-grounded-response-cache.md`](./specs/10c-grounded-response-cache.md)：可验证的回答复用；
+- [`specs/10d-selective-agent-memory.md`](./specs/10d-selective-agent-memory.md)：Selective Memory、decay 与 lineage；
+- [`specs/12-agent-workflow.md`](./specs/12-agent-workflow.md)：共享 transition、检索与 Evidence loop；
 - [`specs/13-llm-answer-generation.md`](./specs/13-llm-answer-generation.md)：答案生成与 citation guard；
 - [`specs/70-quality-and-evaluation.md`](./specs/70-quality-and-evaluation.md)：测试和评测标准；
 - [`demo/README.md`](./demo/README.md)：完整运行、配置和故障排查。

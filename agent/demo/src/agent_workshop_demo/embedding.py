@@ -234,18 +234,6 @@ def _deterministic_dense_vector(text: str, dim: int) -> list[float]:
     return normalize(vector)
 
 
-def image_vector(
-    text: str,
-    dim: int = VECTOR_DIMS["IMAGE_DIM"],
-) -> list[float]:
-    """Build a deterministic image-caption placeholder vector."""
-
-    return DeterministicTextEmbeddingProvider().embed(
-        f"image::{text}",
-        dimensions=dim,
-    )
-
-
 @lru_cache(maxsize=1)
 def _default_text_embedding_provider() -> TextEmbeddingProvider:
     """Reuse one configured provider and its HTTP connection pool."""

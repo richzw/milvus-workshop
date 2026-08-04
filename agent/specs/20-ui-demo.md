@@ -60,9 +60,15 @@ During execution, Chat shows a compact, softly styled timeline in the assistant 
 - completion collapses the container to a one-line stage/count/latency summary;
 - technical details remain optional and collapsed.
 
+Local and LangGraph runtimes derive branch order from the shared transition
+contract in [`12-agent-workflow.md`](./12-agent-workflow.md#31-shared-transition-contract).
+The UI therefore renders the same composite stage names and registered ordering
+for equivalent terminal paths; it never reconstructs or overrides a transition
+locally.
+
 The Agent Trace tab replays the same event list in execution order and shows:
 
-- intent/topic, matched or ambiguous entities, catalog version and `need_retrieval`;
+- intent/topic/retrieval goal、classifier/model/confidence/fallback、matched or ambiguous entities、catalog version 与 `need_retrieval`;
 - permission decision;
 - selected tools and routing reasons;
 - decomposed subqueries and dependency edges;
@@ -76,12 +82,23 @@ Raw trace JSON remains available only inside an explicitly labeled “Advanced t
 
 ### 4.4 Memory
 
-- Current Memory status, configured TTL, recalled/written counts.
+- Current Memory status, configured TTL, recalled/written counts for the implemented baseline.
+- Grounded response cache status、exact/semantic match type、bounded similarity、source query id 与 expiry；不显示候选答案或 vectors。
 - Bounded recalled summaries used by the latest query.
 - Up to 200 live records for the active session, showing role, memory type, bounded summary/content preview, created/expiry time.
 - No vector or arbitrary metadata rendering.
 - One explicit “Clear conversation & memory” control scoped to the generated session id.
 - `recall_failed`/`write_failed` render as a non-blocking warning distinct from an empty Memory result.
+
+Selective Memory milestone adds a target-state view without exposing payloads:
+
+- bounded counts for working state、durable facts、recent episodes and conflicts;
+- retention-class and selection-reason distributions;
+- active decay profile names and soft/logical/physical forgetting status;
+- consolidation status and source-lineage ids only inside a session-private advanced view;
+- explicit labels distinguishing an episode、a consolidated fact and a grounded response-cache entry.
+
+The UI never lets a user edit salience, decay score, permission scope or active fact status directly. Clear remains stronger than append-only lineage and erases active-session event/fact payloads, vectors and response-cache records.
 
 ## 5. UI invariants
 
@@ -97,7 +114,8 @@ Raw trace JSON remains available only inside an explicitly labeled “Advanced t
 10. Grounded answer text never appears before successful citation/self-check; progress copy calls this “生成与校验”, not token streaming.
 11. Chat history and Memory records use one generated session id; neither the question nor a UI control may select another session.
 12. An incomplete/failed workflow stream appends no assistant turn and persists no current-turn Memory.
-13. Clearing deletes only active-session Memory and resets messages/events/last response; it does not drop collections.
+13. Clearing deletes only active-session Memory and response-cache records, then resets messages/events/last response; it does not drop collections.
+14. A recall/display action never refreshes Memory lifecycle; only an explicit reconfirmation or validated outcome may do so.
 
 ## 6. Error states
 
@@ -114,6 +132,6 @@ Raw trace JSON remains available only inside an explicitly labeled “Advanced t
 
 ## 7. Cross-references
 
-- ← Depends on: [`12-agent-workflow.md`](./12-agent-workflow.md), [`13-llm-answer-generation.md`](./13-llm-answer-generation.md), [`10b-conversation-memory.md`](./10b-conversation-memory.md), [`10-data-model.md § query_traces`](./10-data-model.md#61-query_traces)
+- ← Depends on: [`12-agent-workflow.md`](./12-agent-workflow.md), [`13-llm-answer-generation.md`](./13-llm-answer-generation.md), [`10b-conversation-memory.md`](./10b-conversation-memory.md), [`10d-selective-agent-memory.md`](./10d-selective-agent-memory.md), [`10-data-model.md § query_traces`](./10-data-model.md#61-query_traces)
 - ↔ Acceptance: [`70-quality-and-evaluation.md`](./70-quality-and-evaluation.md)
 - ↔ Decision: [`99-key-decisions.md § D13`](./99-key-decisions.md#d13--metadata-routing-is-owned-by-tools-not-ui)

@@ -1,0 +1,11 @@
+{
+  "schema_version": "selective-memory-eval-v2",
+  "cases": [
+    {"case_id":"preference","scenario":"explicit_preference","expected_retain":true,"expected_active_fact":true,"expected_correction":false,"expected_conflict":false},
+    {"case_id":"ordinary","scenario":"ordinary_turn","expected_retain":false,"expected_active_fact":false,"expected_correction":false,"expected_conflict":false},
+    {"case_id":"correction","scenario":"correction","expected_retain":true,"expected_active_fact":true,"expected_correction":true,"expected_conflict":false},
+    {"case_id":"conflict","scenario":"conflict","expected_retain":true,"expected_active_fact":false,"expected_correction":false,"expected_conflict":true},
+    {"case_id":"replay","scenario":"replay","expected_retain":true,"expected_active_fact":true,"expected_correction":false,"expected_conflict":false},
+    {"case_id":"stale","scenario":"stale_filter","expected_retain":true,"expected_active_fact":false,"expected_correction":false,"expected_conflict":false}
+  ]
+}

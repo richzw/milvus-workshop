@@ -1,0 +1,88 @@
+{
+  "schema_version": "image-retrieval-v1",
+  "cases": [
+  {
+    "case_id": "text_s3_sync",
+    "mode": "text",
+    "query": "哪张图展示 MinIO bucket scan、change detection、chunking 和 Milvus insertion？",
+    "expected_sources": [
+      "sample_data/local_docs/images/s3_sync_flow.png"
+    ],
+    "filters": {
+      "department": "engineering"
+    }
+  },
+  {
+    "case_id": "text_rag_architecture",
+    "mode": "text",
+    "query": "查找展示 Streamlit、LangGraph、Milvus retriever、reranker 和 citation 的 Agent Chat 架构图",
+    "expected_sources": [
+      "sample_data/local_docs/images/rag_architecture.png"
+    ]
+  },
+  {
+    "case_id": "text_hybrid_search",
+    "mode": "text",
+    "query": "哪张图解释 dense semantic search、sparse BM25、metadata filter 和 reranking？",
+    "expected_sources": [
+      "sample_data/local_docs/images/milvus_hybrid_search.png"
+    ]
+  },
+  {
+    "case_id": "text_agentic_workflow",
+    "mode": "text",
+    "query": "查找包含 intent classification、permission、multi-hop retrieval、evidence grading 和 retry 的流程图",
+    "expected_sources": [
+      "sample_data/local_docs/images/agentic_rag_workflow.png"
+    ]
+  },
+  {
+    "case_id": "text_ingestion_pipeline",
+    "mode": "text",
+    "query": "哪张图展示 local docs 与 mock S3 经 PDF extraction、metadata enrichment、dedup、embedding 写入 collections？",
+    "expected_sources": [
+      "sample_data/local_docs/images/ingestion_pipeline.png"
+    ]
+  },
+  {
+    "case_id": "image_s3_sync",
+    "mode": "image",
+    "image_path": "sample_data/local_docs/images/s3_sync_flow.png",
+    "expected_sources": [
+      "sample_data/local_docs/images/s3_sync_flow.png"
+    ]
+  },
+  {
+    "case_id": "image_rag_architecture",
+    "mode": "image",
+    "image_path": "sample_data/local_docs/images/rag_architecture.png",
+    "expected_sources": [
+      "sample_data/local_docs/images/rag_architecture.png"
+    ]
+  },
+  {
+    "case_id": "image_hybrid_search",
+    "mode": "image",
+    "image_path": "sample_data/local_docs/images/milvus_hybrid_search.png",
+    "expected_sources": [
+      "sample_data/local_docs/images/milvus_hybrid_search.png"
+    ]
+  },
+  {
+    "case_id": "image_agentic_workflow",
+    "mode": "image",
+    "image_path": "sample_data/local_docs/images/agentic_rag_workflow.png",
+    "expected_sources": [
+      "sample_data/local_docs/images/agentic_rag_workflow.png"
+    ]
+  },
+  {
+    "case_id": "image_ingestion_pipeline",
+    "mode": "image",
+    "image_path": "sample_data/local_docs/images/ingestion_pipeline.png",
+    "expected_sources": [
+      "sample_data/local_docs/images/ingestion_pipeline.png"
+    ]
+  }
+  ]
+}

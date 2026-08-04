@@ -14,6 +14,11 @@ from agent_workshop_demo.embedding import (
     dense_vector,
     text_embedding_fingerprint,
 )
+from agent_workshop_demo.milvus_time import (
+    encode_expiry,
+    optional_epoch_ms_from_milvus,
+    timestamp_literal,
+)
 from agent_workshop_demo.validation import validate_identifier
 
 MemoryRole = Literal["user", "assistant", "system", "summary"]
@@ -179,6 +184,14 @@ class ConversationMemory(Protocol):
         limit: int = MAX_SESSION_RECORDS,
     ) -> list[MemoryRecord]: ...
 
+    def list_recent_user_questions(
+        self,
+        session_id: str,
+        *,
+        now_ms: int,
+        limit: int,
+    ) -> list[MemoryRecord]: ...
+
     def delete_session(self, session_id: str) -> int: ...
 
 
@@ -319,6 +332,30 @@ class ConversationMemoryStore:
                 item.memory_type,
             ),
         )[:limit]
+
+    def list_recent_user_questions(
+        self,
+        session_id: str,
+        *,
+        now_ms: int | None = None,
+        limit: int,
+    ) -> list[MemoryRecord]:
+        """Return live user questions from newest to oldest."""
+
+        validate_identifier(session_id, field_name="session_id")
+        _validate_limit(limit, maximum=MAX_MEMORY_TOP_K)
+        current = self.now_ms if now_ms is None else now_ms
+        if current < 0:
+            raise ValueError("now_ms cannot be negative")
+        records = [
+            item
+            for item in self.records
+            if item.session_id == session_id
+            and item.role == "user"
+            and item.memory_type == "short_term"
+            and (item.expires_at is None or item.expires_at > current)
+        ]
+        return sorted(records, key=_memory_order_key, reverse=True)[:limit]
 
     def delete_session(self, session_id: str) -> int:
         """Delete only records belonging to the requested session."""
@@ -520,6 +557,71 @@ class MilvusConversationMemoryStore:
                     ) from exc
         return selected
 
+    def list_recent_user_questions(
+        self,
+        session_id: str,
+        *,
+        now_ms: int,
+        limit: int,
+    ) -> list[MemoryRecord]:
+        """List the global newest live user questions for one session."""
+
+        validate_identifier(session_id, field_name="session_id")
+        _validate_limit(limit, maximum=MAX_MEMORY_TOP_K)
+        if now_ms < 0:
+            raise ValueError("now_ms cannot be negative")
+        expression = (
+            _memory_filter(
+                session_id,
+                now_ms=now_ms,
+                memory_types=("short_term",),
+            )
+            + ' and role == "user"'
+        )
+        iterator: Any | None = None
+        selected: list[MemoryRecord] = []
+        try:
+            iterator = self.client.query_iterator(
+                collection_name=self.collection_name,
+                filter=expression,
+                output_fields=self.OUTPUT_FIELDS,
+                batch_size=MAX_SESSION_RECORDS,
+                limit=-1,
+            )
+            while True:
+                rows = iterator.next()
+                if not rows:
+                    break
+                batch = [_record_from_milvus(row) for row in rows]
+                _validate_returned_records(
+                    batch,
+                    session_id=session_id,
+                    now_ms=now_ms,
+                    memory_types=("short_term",),
+                    roles=("user",),
+                )
+                selected.extend(batch)
+                selected = sorted(
+                    selected,
+                    key=_memory_order_key,
+                    reverse=True,
+                )[:limit]
+        except MemoryStoreError:
+            raise
+        except Exception as exc:
+            raise MemoryStoreError(
+                "Unable to list recent conversation questions"
+            ) from exc
+        finally:
+            if iterator is not None:
+                try:
+                    iterator.close()
+                except Exception as exc:
+                    raise MemoryStoreError(
+                        "Unable to close the recent-question listing"
+                    ) from exc
+        return selected
+
     def delete_session(self, session_id: str) -> int:
         """Delete only one validated session's Memory."""
 
@@ -664,7 +766,7 @@ def _memory_filter(
 ) -> str:
     clauses = [
         f"session_id == {_quoted(session_id)}",
-        f"(expires_at is null or expires_at > {now_ms})",
+        f"(expires_at is null or expires_at > {timestamp_literal(now_ms)})",
     ]
     if memory_types is not None:
         clauses.append(
@@ -675,11 +777,9 @@ def _memory_filter(
 
 
 def _record_for_milvus(record: MemoryRecord) -> dict[str, Any]:
-    data = record.to_dict()
+    data = encode_expiry(record.to_dict())
     if data["summary"] is None:
         data.pop("summary")
-    if data["expires_at"] is None:
-        data.pop("expires_at")
     return data
 
 
@@ -704,7 +804,7 @@ def _record_from_milvus(data: dict[str, Any]) -> MemoryRecord:
             expires_at=(
                 None
                 if data.get("expires_at") is None
-                else int(data["expires_at"])
+                else optional_epoch_ms_from_milvus(data["expires_at"])
             ),
             metadata=(
                 dict(data["metadata"])
@@ -756,6 +856,7 @@ def _validate_returned_records(
     session_id: str,
     now_ms: int,
     memory_types: tuple[MemoryType, ...] | None = None,
+    roles: tuple[MemoryRole, ...] | None = None,
 ) -> None:
     """Fail closed when Milvus violates the mandatory Memory filter."""
 
@@ -771,6 +872,7 @@ def _validate_returned_records(
                 memory_types is not None
                 and record.memory_type not in memory_types
             )
+            or (roles is not None and record.role not in roles)
         ):
             raise MemoryStoreError(
                 "Milvus returned Memory outside the requested scope"

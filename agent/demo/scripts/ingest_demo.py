@@ -15,11 +15,20 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from agent_workshop_demo.embedding import text_embedding_fingerprint
+from agent_workshop_demo.image_embedding import image_embedding_fingerprint
 from agent_workshop_demo.ingestion import (
     ingest_demo_sources,
+    ingest_minio_sources,
     write_ingestion_result,
 )
-from agent_workshop_demo.schema.pymilvus_adapter import MilvusHybridRetriever
+from agent_workshop_demo.object_store import (
+    MinIOAdapterError,
+    build_minio_source_adapter,
+)
+from agent_workshop_demo.schema.pymilvus_adapter import (
+    MilvusDedupStore,
+    MilvusHybridRetriever,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,6 +44,12 @@ def main(argv: list[str] | None = None) -> int:
         "--mock-s3-dir",
         type=Path,
         default=Path("demo/sample_data/mock_s3"),
+    )
+    parser.add_argument(
+        "--s3-source",
+        choices=("mock", "minio"),
+        default="mock",
+        help="Object-store source mode (default: checked-in mock directory).",
     )
     parser.add_argument(
         "--version-manifest",
@@ -69,11 +84,30 @@ def main(argv: list[str] | None = None) -> int:
         help="Build records without connecting to Milvus.",
     )
     args = parser.parse_args(argv)
-    result = ingest_demo_sources(
-        args.local_dir,
-        args.mock_s3_dir,
-        version_manifest_path=args.version_manifest,
-    )
+    minio_report: dict[str, object] = {}
+    if args.s3_source == "minio":
+        try:
+            minio_result = ingest_minio_sources(
+                args.local_dir,
+                build_minio_source_adapter(),
+                version_manifest_path=args.version_manifest,
+            )
+        except MinIOAdapterError as exc:
+            parser.error(str(exc))
+        result = minio_result.ingestion
+        minio_report = {
+            "s3_source": "minio",
+            "source_base_uri": minio_result.source_base_uri,
+            "source_object_count": minio_result.source_object_count,
+            "source_total_bytes": minio_result.source_total_bytes,
+        }
+    else:
+        result = ingest_demo_sources(
+            args.local_dir,
+            args.mock_s3_dir,
+            version_manifest_path=args.version_manifest,
+        )
+        minio_report = {"s3_source": "mock"}
     paths = (
         write_ingestion_result(result, args.output_dir)
         if args.output_dir
@@ -92,7 +126,9 @@ def main(argv: list[str] | None = None) -> int:
         "generated_chunks": len(result.kb_chunks),
         "embedded_chunks": len(result.kb_chunks),
         "text_embedding_fingerprint": text_embedding_fingerprint(),
+        "image_embedding_fingerprint": image_embedding_fingerprint(),
         "jsonl": {key: str(value) for key, value in paths.items()},
+        **minio_report,
     }
     if args.dry_run:
         report["dry_run"] = True
@@ -105,6 +141,10 @@ def main(argv: list[str] | None = None) -> int:
         batch_size=args.batch_size,
     )
     insert_report = adapter.insert(result.kb_chunks)
+    dedup_report = MilvusDedupStore(
+        adapter.client,
+        batch_size=args.batch_size,
+    ).insert(result.dedup_signatures)
     verified = adapter.verify_inserted(
         chunk.chunk_id for chunk in result.kb_chunks
     )
@@ -112,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         {
             "collection": args.collection_name,
             **insert_report,
+            **dedup_report,
             "verified_count": verified,
         }
     )

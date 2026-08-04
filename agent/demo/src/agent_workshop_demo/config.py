@@ -15,6 +15,10 @@ ENV_KEY_PATTERN: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 COLLECTION_NAMES: Final = {
     "kb_chunks": "kb_chunks",
     "conversation_memory": "conversation_memory",
+    "memory_events": "memory_events",
+    "memory_facts": "memory_facts",
+    "memory_consolidation_journal": "memory_consolidation_journal",
+    "grounded_response_cache": "grounded_response_cache",
     "doc_dedup_signatures": "doc_dedup_signatures",
 }
 
@@ -33,6 +37,7 @@ DEFAULT_SEARCH_PARAMS: Final[dict[str, Any]] = {
     "answer_context_top_k": 5,
     "search_mode": "hybrid",
     "order_by": ["updated_at desc", "priority desc"],
+    "order_mode": "relevance",
     "filters": {
         "source_type": ["local", "s3"],
         "doc_type": ["markdown", "pdf", "text", "image"],
@@ -64,9 +69,7 @@ def load_demo_env(
         key, separator, raw_value = line.partition("=")
         key = key.strip()
         if not separator or not ENV_KEY_PATTERN.fullmatch(key):
-            raise ValueError(
-                f"Invalid environment entry at {env_path}:{line_number}"
-            )
+            raise ValueError(f"Invalid environment entry at {env_path}:{line_number}")
         value = _parse_env_value(raw_value.strip(), env_path, line_number)
         if override or key not in target:
             target[key] = value
@@ -80,9 +83,7 @@ def _parse_env_value(value: str, path: Path, line_number: int) -> str:
         return value
     quote = value[0]
     if len(value) < 2 or value[-1] != quote:
-        raise ValueError(
-            f"Unclosed quoted value at {path}:{line_number}"
-        )
+        raise ValueError(f"Unclosed quoted value at {path}:{line_number}")
     unquoted = value[1:-1]
     if quote == '"':
         return (
