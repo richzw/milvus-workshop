@@ -8,18 +8,38 @@ from collections.abc import Mapping
 from importlib import import_module
 from typing import Any, Protocol, cast
 
+from agent_workshop_demo.classification import build_query_classifier
 from agent_workshop_demo.generation import build_answer_generator
+from agent_workshop_demo.reranker import build_reranker
 from agent_workshop_demo.events import WorkflowEventEmitter
 from agent_workshop_demo.memory import (
     ConversationMemory,
     MilvusConversationMemoryStore,
 )
+from agent_workshop_demo.models import EvidenceAction
+from agent_workshop_demo.response_cache import (
+    DEFAULT_KB_REVISION,
+    DEFAULT_RESPONSE_CACHE_SIMILARITY_THRESHOLD,
+    DEFAULT_RESPONSE_CACHE_TOP_K,
+    DEFAULT_RESPONSE_CACHE_TTL_SECONDS,
+    GroundedResponseCache,
+    MilvusGroundedResponseCacheStore,
+)
+from agent_workshop_demo.selective_memory import (
+    DecayMode,
+    MilvusSelectiveMemoryStore,
+    SelectiveMemoryService,
+    build_memory_selector,
+)
 from agent_workshop_demo.retrieval import HybridRetriever
 from agent_workshop_demo.schema.pymilvus_adapter import MilvusHybridRetriever
+from agent_workshop_demo.transitions import (
+    WorkflowNode,
+    next_transition,
+)
 from agent_workshop_demo.workflow import (
     DEFAULT_MEMORY_TOP_K,
     DEFAULT_MEMORY_TTL_SECONDS,
-    PERMISSION_DENIED_RESPONSE,
     AgenticRAGWorkflow,
 )
 
@@ -76,6 +96,19 @@ class LangGraphAgenticRAGWorkflow:
 
         return self.workflow.list_memories(session_id, limit=limit)
 
+    def list_selective_memories(
+        self,
+        session_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Delegate selective-Memory listing to the underlying workflow."""
+
+        return self.workflow.list_selective_memories(
+            session_id,
+            limit=limit,
+        )
+
     def clear_memory(self, session_id: str) -> int:
         """Delete only the requested session's Memory."""
 
@@ -128,14 +161,10 @@ class LangGraphAgenticRAGWorkflow:
                     yield {"type": "answer_delta", "text": chunk}
                 answer_emitted = True
                 continue
-            if node_name == "persist_turn_memory":
+            if node_name in {"output_gate", "persist_turn_memory"}:
                 continue
 
-            stage = (
-                "prepare_supplementary_retrieval"
-                if node_name == "prepare_retry"
-                else node_name
-            )
+            stage = node_name
             accumulated = state.stage_latency_ms.get(stage, 0.0)
             elapsed = round(
                 accumulated - observed_stage_latency.get(stage, 0.0),
@@ -149,18 +178,19 @@ class LangGraphAgenticRAGWorkflow:
                 elapsed,
                 kind=(
                     "retry_scheduled"
-                    if node_name == "prepare_retry"
+                    if (
+                        node_name == "evaluate_evidence"
+                        and node_payload.get("evidence_action") == "retry"
+                    )
                     else "stage_completed"
                 ),
             )
-            if node_name == "milvus_hybrid_retrieve":
+            if node_name == "execute_tool_plan":
                 for tool_call in state.tool_calls[tool_call_count:]:
                     yield self.workflow._tool_event(emitter, tool_call)
                 tool_call_count = len(state.tool_calls)
         if not final_emitted:
-            raise RuntimeError(
-                "LangGraph stream ended without a terminal response"
-            )
+            raise RuntimeError("LangGraph stream ended without a terminal response")
 
     def _invoke(
         self,
@@ -221,13 +251,16 @@ class LangGraphAgenticRAGWorkflow:
             )
             return payload
 
-        def classify(payload: dict[str, Any]) -> dict[str, Any]:
+        def classify_and_route(payload: dict[str, Any]) -> dict[str, Any]:
             state = payload["state"]
-            self.workflow._measure_stage(
+            result, _elapsed = self.workflow._measure_stage_result_delta(
                 state,
-                "classify_query",
-                lambda: self.workflow.classify_query(state),
+                "classify_and_route",
+                lambda: self.workflow.classify_and_route(state),
             )
+            payload["query_route"] = result.route.value
+            if result.route.value == "direct":
+                payload["answer_chunks"] = [state.answer]
             return payload
 
         def resolve_terminology(
@@ -243,18 +276,6 @@ class LangGraphAgenticRAGWorkflow:
                 payload["answer_chunks"] = [state.answer]
             return payload
 
-        def decide_retrieval(payload: dict[str, Any]) -> dict[str, Any]:
-            state = payload["state"]
-            self.workflow._measure_stage(
-                state,
-                "decide_retrieval",
-                lambda: self.workflow.decide_retrieval(state),
-            )
-            if not state.need_retrieval:
-                self.workflow.prepare_non_retrieval_answer(state)
-                payload["answer_chunks"] = [state.answer]
-            return payload
-
         def check_permission(payload: dict[str, Any]) -> dict[str, Any]:
             state = payload["state"]
             self.workflow._measure_stage(
@@ -263,39 +284,48 @@ class LangGraphAgenticRAGWorkflow:
                 lambda: self.workflow.check_permission(state),
             )
             if not state.permission_decision.get("allowed", False):
-                state.answer = PERMISSION_DENIED_RESPONSE
-                state.terminal_status = "permission_denied"
-                state.answer_validation = {
-                    "valid": True,
-                    "mode": "permission_denied",
-                    "reason": "Retrieval and generation were not executed.",
-                }
                 payload["answer_chunks"] = [state.answer]
             return payload
 
-        def select_tools(payload: dict[str, Any]) -> dict[str, Any]:
+        def try_grounded_cache(
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
             state = payload["state"]
             self.workflow._measure_stage(
                 state,
-                "select_tools",
-                lambda: self.workflow.select_tools(state),
+                "try_grounded_cache",
+                lambda: self.workflow.try_grounded_cache(state),
+            )
+            if state.terminal_status == "answered_from_cache":
+                payload["answer_chunks"] = [state.answer]
+            return payload
+
+        def recall_authorized_experience(
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
+            state = payload["state"]
+            self.workflow._measure_stage(
+                state,
+                "recall_authorized_experience",
+                lambda: self.workflow.recall_authorized_experience(state),
             )
             return payload
 
-        def rewrite(payload: dict[str, Any]) -> dict[str, Any]:
+        def plan_retrieval(payload: dict[str, Any]) -> dict[str, Any]:
             state = payload["state"]
-            self.workflow._measure_stage(
+            result, _elapsed = self.workflow._measure_stage_result_delta(
                 state,
-                "rewrite_query",
-                lambda: self.workflow.rewrite_query(state),
+                "plan_retrieval",
+                lambda: self.workflow.plan_retrieval(state),
             )
+            payload["retrieval_plan_count"] = result.plan_count
             return payload
 
         def retrieve(payload: dict[str, Any]) -> dict[str, Any]:
             state = payload["state"]
             self.workflow._measure_stage(
                 state,
-                "milvus_hybrid_retrieve",
+                "execute_tool_plan",
                 lambda: self.workflow.milvus_hybrid_retrieve(state),
             )
             return payload
@@ -309,23 +339,14 @@ class LangGraphAgenticRAGWorkflow:
             )
             return payload
 
-        def grade(payload: dict[str, Any]) -> dict[str, Any]:
+        def evaluate_evidence(payload: dict[str, Any]) -> dict[str, Any]:
             state = payload["state"]
-            self.workflow._measure_stage(
+            result, _elapsed = self.workflow._measure_stage_result_delta(
                 state,
-                "grade_evidence",
-                lambda: self.workflow.grade_evidence(state),
+                "evaluate_evidence",
+                lambda: self.workflow.evaluate_evidence(state),
             )
-            return payload
-
-        def prepare_retry(payload: dict[str, Any]) -> dict[str, Any]:
-            state = payload["state"]
-            state.retry_count += 1
-            self.workflow._measure_stage(
-                state,
-                "prepare_supplementary_retrieval",
-                lambda: self.workflow.prepare_supplementary_retrieval(state),
-            )
+            payload["evidence_action"] = result.action.value
             return payload
 
         def answer(payload: dict[str, Any]) -> dict[str, Any]:
@@ -334,9 +355,7 @@ class LangGraphAgenticRAGWorkflow:
             self.workflow._measure_stage(
                 state,
                 "generate_answer_streaming",
-                lambda: chunks.extend(
-                    self.workflow.generate_answer_streaming(state)
-                ),
+                lambda: chunks.extend(self.workflow.generate_answer_streaming(state)),
             )
             state.answer = "".join(chunks)
             payload["answer_chunks"] = chunks
@@ -371,95 +390,125 @@ class LangGraphAgenticRAGWorkflow:
             payload["response"] = self.workflow._serialize(state)
             return payload
 
-        def after_retrieval_decision(payload: dict[str, Any]) -> str:
-            return (
-                "finalize"
-                if not payload["state"].need_retrieval
-                else "check_permission"
-            )
+        def after_classify_and_route(payload: dict[str, Any]) -> str:
+            return next_transition(
+                WorkflowNode.CLASSIFY_AND_ROUTE,
+                payload["state"],
+            ).next_node.value
 
         def after_terminology_resolution(
             payload: dict[str, Any],
         ) -> str:
-            return (
-                "finalize"
-                if payload["state"].terminal_status
-                == "clarification_required"
-                else "decide_retrieval"
-            )
+            return next_transition(
+                WorkflowNode.RESOLVE_TERMINOLOGY,
+                payload["state"],
+            ).next_node.value
 
         def after_permission(payload: dict[str, Any]) -> str:
-            return (
-                "select_tools"
-                if payload["state"].permission_decision.get("allowed", False)
-                else "finalize"
-            )
+            return next_transition(
+                WorkflowNode.CHECK_PERMISSION,
+                payload["state"],
+            ).next_node.value
 
-        def after_grade(payload: dict[str, Any]) -> str:
-            state = payload["state"]
-            if state.enough_evidence or state.retry_count >= state.max_retry:
-                state.terminal_status = (
-                    "answered" if state.enough_evidence else "abstained"
-                )
-                return "answer"
-            return "prepare_retry"
+        def after_cache_validation(payload: dict[str, Any]) -> str:
+            return next_transition(
+                WorkflowNode.TRY_GROUNDED_CACHE,
+                payload["state"],
+            ).next_node.value
+
+        def after_evaluate_evidence(payload: dict[str, Any]) -> str:
+            action = payload.get("evidence_action")
+            if not isinstance(action, str):
+                raise ValueError("evidence_action is missing")
+
+            return next_transition(
+                WorkflowNode.EVALUATE_EVIDENCE,
+                payload["state"],
+                evidence_action=EvidenceAction(action),
+            ).next_node.value
+
+        def after_retrieve(payload: dict[str, Any]) -> str:
+            return next_transition(
+                WorkflowNode.EXECUTE_TOOL_PLAN,
+                payload["state"],
+            ).next_node.value
 
         graph.add_node("recall_memory", recall_memory)
-        graph.add_node("classify_query", classify)
+        graph.add_node("classify_and_route", classify_and_route)
         graph.add_node("resolve_terminology", resolve_terminology)
-        graph.add_node("decide_retrieval", decide_retrieval)
         graph.add_node("check_permission", check_permission)
-        graph.add_node("select_tools", select_tools)
-        graph.add_node("rewrite_query", rewrite)
-        graph.add_node("milvus_hybrid_retrieve", retrieve)
+        graph.add_node(
+            "try_grounded_cache",
+            try_grounded_cache,
+        )
+        graph.add_node(
+            "recall_authorized_experience",
+            recall_authorized_experience,
+        )
+        graph.add_node("plan_retrieval", plan_retrieval)
+        graph.add_node("execute_tool_plan", retrieve)
         graph.add_node("rerank_evidence", rerank)
-        graph.add_node("grade_evidence", grade)
-        graph.add_node("prepare_retry", prepare_retry)
+        graph.add_node("evaluate_evidence", evaluate_evidence)
         graph.add_node("generate_answer_streaming", answer)
         graph.add_node("verify_answer", verify)
         graph.add_node("answer_ready", answer_ready)
         graph.add_node("persist_turn_memory", persist_memory)
         graph.add_node("finalize", finalize)
         graph.set_entry_point("recall_memory")
-        graph.add_edge("recall_memory", "classify_query")
-        graph.add_edge("classify_query", "resolve_terminology")
+        graph.add_edge("recall_memory", "classify_and_route")
+        graph.add_conditional_edges(
+            "classify_and_route",
+            after_classify_and_route,
+            {
+                "resolve_terminology": "resolve_terminology",
+                "output_gate": "answer_ready",
+            },
+        )
         graph.add_conditional_edges(
             "resolve_terminology",
             after_terminology_resolution,
             {
-                "decide_retrieval": "decide_retrieval",
-                "finalize": "answer_ready",
-            },
-        )
-        graph.add_conditional_edges(
-            "decide_retrieval",
-            after_retrieval_decision,
-            {
                 "check_permission": "check_permission",
-                "finalize": "answer_ready",
+                "output_gate": "answer_ready",
             },
         )
         graph.add_conditional_edges(
             "check_permission",
             after_permission,
             {
-                "select_tools": "select_tools",
-                "finalize": "answer_ready",
+                "try_grounded_cache": "try_grounded_cache",
+                "output_gate": "answer_ready",
             },
         )
-        graph.add_edge("select_tools", "rewrite_query")
-        graph.add_edge("rewrite_query", "milvus_hybrid_retrieve")
-        graph.add_edge("milvus_hybrid_retrieve", "rerank_evidence")
-        graph.add_edge("rerank_evidence", "grade_evidence")
         graph.add_conditional_edges(
-            "grade_evidence",
-            after_grade,
+            "try_grounded_cache",
+            after_cache_validation,
             {
-                "prepare_retry": "prepare_retry",
-                "answer": "generate_answer_streaming",
+                "recall_authorized_experience": (
+                    "recall_authorized_experience"
+                ),
+                "output_gate": "answer_ready",
             },
         )
-        graph.add_edge("prepare_retry", "milvus_hybrid_retrieve")
+        graph.add_edge("recall_authorized_experience", "plan_retrieval")
+        graph.add_edge("plan_retrieval", "execute_tool_plan")
+        graph.add_conditional_edges(
+            "execute_tool_plan",
+            after_retrieve,
+            {
+                "rerank_evidence": "rerank_evidence",
+                "generate_candidate_answer": "generate_answer_streaming",
+            },
+        )
+        graph.add_edge("rerank_evidence", "evaluate_evidence")
+        graph.add_conditional_edges(
+            "evaluate_evidence",
+            after_evaluate_evidence,
+            {
+                "execute_tool_plan": "execute_tool_plan",
+                "generate_candidate_answer": "generate_answer_streaming",
+            },
+        )
         graph.add_edge("generate_answer_streaming", "verify_answer")
         graph.add_edge("verify_answer", "answer_ready")
         graph.add_edge("answer_ready", "persist_turn_memory")
@@ -474,15 +523,42 @@ def build_default_workflow(
     memory_store: ConversationMemory | None = None,
     memory_top_k: int = DEFAULT_MEMORY_TOP_K,
     memory_ttl_seconds: int = DEFAULT_MEMORY_TTL_SECONDS,
+    selective_memory: SelectiveMemoryService | None = None,
+    selective_memory_enabled: bool = True,
+    response_cache: GroundedResponseCache | None = None,
+    response_cache_enabled: bool = True,
+    response_cache_top_k: int = DEFAULT_RESPONSE_CACHE_TOP_K,
+    response_cache_ttl_seconds: int = (DEFAULT_RESPONSE_CACHE_TTL_SECONDS),
+    response_cache_similarity_threshold: float = (
+        DEFAULT_RESPONSE_CACHE_SIMILARITY_THRESHOLD
+    ),
+    kb_revision: str = DEFAULT_KB_REVISION,
 ) -> AgenticRAGWorkflow | LangGraphAgenticRAGWorkflow:
     """Build configured generation and prefer LangGraph orchestration."""
 
+    configured_selective_memory = (
+        selective_memory
+        if selective_memory is not None
+        else SelectiveMemoryService(
+            selector=(build_memory_selector() if selective_memory_enabled else None)
+        )
+    )
     workflow = AgenticRAGWorkflow(
         retriever=retriever,
+        reranker=build_reranker(),
+        query_classifier=build_query_classifier(),
         answer_generator=build_answer_generator(),
         memory_store=memory_store,
         memory_top_k=memory_top_k,
         memory_ttl_seconds=memory_ttl_seconds,
+        selective_memory=configured_selective_memory,
+        selective_memory_enabled=selective_memory_enabled,
+        response_cache=response_cache,
+        response_cache_enabled=response_cache_enabled,
+        response_cache_top_k=response_cache_top_k,
+        response_cache_ttl_seconds=response_cache_ttl_seconds,
+        response_cache_similarity_threshold=(response_cache_similarity_threshold),
+        kb_revision=kb_revision,
     )
     try:
         return LangGraphAgenticRAGWorkflow(workflow)
@@ -506,6 +582,12 @@ def build_milvus_workflow(
     ).strip()
     if not collection_name:
         raise ValueError("MILVUS_COLLECTION_NAME must be non-empty")
+    sparse_field = values.get(
+        "MILVUS_SPARSE_FIELD",
+        "sparse_vector",
+    ).strip()
+    if not sparse_field:
+        raise ValueError("MILVUS_SPARSE_FIELD must be non-empty")
     memory_collection_name = values.get(
         "MILVUS_MEMORY_COLLECTION_NAME",
         "conversation_memory",
@@ -524,12 +606,112 @@ def build_milvus_workflow(
         ),
         name="MEMORY_TTL_SECONDS",
     )
+    selective_memory_enabled = _boolean(
+        values.get("SELECTIVE_MEMORY_ENABLED", "true"),
+        name="SELECTIVE_MEMORY_ENABLED",
+    )
+    memory_events_collection_name = values.get(
+        "MILVUS_MEMORY_EVENTS_COLLECTION_NAME",
+        "memory_events",
+    ).strip()
+    if not memory_events_collection_name:
+        raise ValueError("MILVUS_MEMORY_EVENTS_COLLECTION_NAME must be non-empty")
+    memory_facts_collection_name = values.get(
+        "MILVUS_MEMORY_FACTS_COLLECTION_NAME",
+        "memory_facts",
+    ).strip()
+    if not memory_facts_collection_name:
+        raise ValueError("MILVUS_MEMORY_FACTS_COLLECTION_NAME must be non-empty")
+    memory_journal_collection_name = values.get(
+        "MILVUS_MEMORY_CONSOLIDATION_JOURNAL_COLLECTION_NAME",
+        "memory_consolidation_journal",
+    ).strip()
+    if not memory_journal_collection_name:
+        raise ValueError(
+            "MILVUS_MEMORY_CONSOLIDATION_JOURNAL_COLLECTION_NAME must be non-empty"
+        )
+    memory_lane_top_k = _positive_int(
+        values.get("MEMORY_LANE_TOP_K", "3"),
+        name="MEMORY_LANE_TOP_K",
+        maximum=20,
+    )
+    memory_pack_max_records = _positive_int(
+        values.get("MEMORY_PACK_MAX_RECORDS", "12"),
+        name="MEMORY_PACK_MAX_RECORDS",
+        maximum=20,
+    )
+    memory_context_max_chars = _bounded_int(
+        values.get("MEMORY_CONTEXT_MAX_CHARS", "4000"),
+        name="MEMORY_CONTEXT_MAX_CHARS",
+        minimum=512,
+        maximum=8192,
+    )
+    memory_consolidation_batch_size = _bounded_int(
+        values.get("MEMORY_CONSOLIDATION_BATCH_SIZE", "20"),
+        name="MEMORY_CONSOLIDATION_BATCH_SIZE",
+        minimum=2,
+        maximum=100,
+    )
+    memory_recurrence_threshold = _bounded_int(
+        values.get("MEMORY_RECURRENCE_THRESHOLD", "2"),
+        name="MEMORY_RECURRENCE_THRESHOLD",
+        minimum=2,
+        maximum=10,
+    )
+    memory_decay_mode = values.get(
+        "MEMORY_DECAY_MODE",
+        "application",
+    ).strip()
+    if memory_decay_mode not in {"application", "milvus"}:
+        raise ValueError("MEMORY_DECAY_MODE must be application or milvus")
+    memory_selector = (
+        build_memory_selector(values) if selective_memory_enabled else None
+    )
+    response_cache_enabled = _boolean(
+        values.get("RESPONSE_CACHE_ENABLED", "true"),
+        name="RESPONSE_CACHE_ENABLED",
+    )
+    response_cache_collection_name = values.get(
+        "MILVUS_RESPONSE_CACHE_COLLECTION_NAME",
+        "grounded_response_cache",
+    ).strip()
+    if not response_cache_collection_name:
+        raise ValueError("MILVUS_RESPONSE_CACHE_COLLECTION_NAME must be non-empty")
+    response_cache_top_k = _positive_int(
+        values.get(
+            "RESPONSE_CACHE_TOP_K",
+            str(DEFAULT_RESPONSE_CACHE_TOP_K),
+        ),
+        name="RESPONSE_CACHE_TOP_K",
+        maximum=20,
+    )
+    response_cache_ttl_seconds = _positive_int(
+        values.get(
+            "RESPONSE_CACHE_TTL_SECONDS",
+            str(DEFAULT_RESPONSE_CACHE_TTL_SECONDS),
+        ),
+        name="RESPONSE_CACHE_TTL_SECONDS",
+    )
+    response_cache_similarity_threshold = _unit_float(
+        values.get(
+            "RESPONSE_CACHE_SIMILARITY_THRESHOLD",
+            str(DEFAULT_RESPONSE_CACHE_SIMILARITY_THRESHOLD),
+        ),
+        name="RESPONSE_CACHE_SIMILARITY_THRESHOLD",
+    )
+    kb_revision = values.get(
+        "KB_REVISION",
+        DEFAULT_KB_REVISION,
+    ).strip()
+    if not kb_revision or len(kb_revision) > 128:
+        raise ValueError("KB_REVISION must contain 1..128 characters")
 
     try:
         retriever = MilvusHybridRetriever.connect(
             uri,
             token,
             collection_name=collection_name,
+            sparse_field=sparse_field,
         )
         retriever.ensure_collection_ready()
         memory_store = MilvusConversationMemoryStore(
@@ -537,6 +719,30 @@ def build_milvus_workflow(
             collection_name=memory_collection_name,
         )
         memory_store.ensure_collection_ready()
+        selective_memory_store = MilvusSelectiveMemoryStore(
+            retriever.client,
+            events_collection_name=memory_events_collection_name,
+            facts_collection_name=memory_facts_collection_name,
+            journal_collection_name=memory_journal_collection_name,
+            decay_mode=cast(DecayMode, memory_decay_mode),
+        )
+        if selective_memory_enabled:
+            selective_memory_store.ensure_collections_ready()
+        selective_memory = SelectiveMemoryService(
+            selective_memory_store,
+            selector=memory_selector,
+            lane_top_k=memory_lane_top_k,
+            pack_max_records=memory_pack_max_records,
+            context_max_chars=memory_context_max_chars,
+            consolidation_batch_size=memory_consolidation_batch_size,
+            recurrence_threshold=memory_recurrence_threshold,
+        )
+        response_cache = MilvusGroundedResponseCacheStore(
+            retriever.client,
+            collection_name=response_cache_collection_name,
+        )
+        if response_cache_enabled:
+            response_cache.ensure_collection_ready()
     except RuntimeError:
         raise
     except Exception as exc:
@@ -549,6 +755,14 @@ def build_milvus_workflow(
         memory_store=memory_store,
         memory_top_k=memory_top_k,
         memory_ttl_seconds=memory_ttl_seconds,
+        selective_memory=selective_memory,
+        selective_memory_enabled=selective_memory_enabled,
+        response_cache=response_cache,
+        response_cache_enabled=response_cache_enabled,
+        response_cache_top_k=response_cache_top_k,
+        response_cache_ttl_seconds=response_cache_ttl_seconds,
+        response_cache_similarity_threshold=(response_cache_similarity_threshold),
+        kb_revision=kb_revision,
     )
 
 
@@ -565,4 +779,39 @@ def _positive_int(
     if value <= 0 or (maximum is not None and value > maximum):
         suffix = f" no greater than {maximum}" if maximum is not None else ""
         raise ValueError(f"{name} must be positive{suffix}")
+    return value
+
+
+def _boolean(raw_value: str, *, name: str) -> bool:
+    normalized = raw_value.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
+def _bounded_int(
+    raw_value: str,
+    *,
+    name: str,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _unit_float(raw_value: str, *, name: str) -> float:
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number in [0, 1]") from exc
+    if not 0 <= value <= 1:
+        raise ValueError(f"{name} must be a number in [0, 1]")
     return value

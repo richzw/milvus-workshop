@@ -38,6 +38,7 @@ class SearchMustNotRunRetriever(InMemoryHybridRetriever):
         top_k: int,
         filters: dict[str, Any] | None = None,
         order_by: list[str] | None = None,
+        order_mode: Any = "relevance",
     ) -> list[SearchResult]:
         raise AssertionError("search must not run before permission")
 
@@ -50,8 +51,9 @@ class VersionCrowdingRetriever(InMemoryHybridRetriever):
         top_k: int,
         filters: dict[str, Any] | None = None,
         order_by: list[str] | None = None,
+        order_mode: Any = "relevance",
     ) -> list[SearchResult]:
-        del query, top_k, order_by
+        del query, top_k, order_by, order_mode
         version = str((filters or {}).get("doc_version"))
         template = next(
             chunk
@@ -205,6 +207,26 @@ class AgenticToolTests(unittest.TestCase):
                 for call in missing["tool_calls"]
             )
         )
+
+    def test_product_associated_bare_version_is_exact(self) -> None:
+        item = AgenticRAGWorkflow().create_state(
+            "介绍下 Milvus 3.0 Force Merge"
+        )
+        item.intent = "private_knowledge"
+        item.query_type = "architecture"
+
+        AgenticRAGWorkflow().resolve_terminology(item)
+
+        self.assertEqual(item.version_scope["mode"], "exact")
+        self.assertEqual(item.version_scope["doc_versions"], ["v3.0"])
+
+        unqualified = AgenticRAGWorkflow().create_state(
+            "指标达到 3.0 是什么意思？"
+        )
+        unqualified.intent = "private_knowledge"
+        unqualified.query_type = "unknown"
+        AgenticRAGWorkflow().resolve_terminology(unqualified)
+        self.assertEqual(unqualified.version_scope["mode"], "current")
 
     def test_explicit_version_comparison_keeps_evidence_partitioned(self) -> None:
         response = AgenticRAGWorkflow().run(

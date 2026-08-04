@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from html import escape
@@ -37,6 +38,120 @@ TRACE_EVENT_FIELDS = {
     "elapsed_ms",
     "details",
 }
+MAX_MEMORY_DASHBOARD_ROWS = 200
+MAX_MEMORY_LINEAGE_EDGES = 500
+
+
+def build_selective_memory_dashboard(
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build bounded distributions and opaque lineage for the Memory tab."""
+
+    bounded = records[:MAX_MEMORY_DASHBOARD_ROWS]
+    events_by_id = {
+        str(row["id"]): row
+        for row in bounded
+        if row.get("kind") == "episode" and isinstance(row.get("id"), str)
+    }
+    event_ids = set(events_by_id)
+    retention = Counter(
+        str(row["status"]) for row in bounded if row.get("kind") == "episode"
+    )
+    reasons = Counter(
+        str(reason)
+        for row in bounded
+        if row.get("kind") == "episode"
+        for reason in row.get("selection_reasons", [])
+        if isinstance(reason, str)
+    )
+    decay = Counter(
+        str(row["decay_profile"])
+        for row in bounded
+        if isinstance(row.get("decay_profile"), str)
+    )
+    fact_status = Counter(
+        str(row["status"]) for row in bounded if row.get("kind") == "fact"
+    )
+    lineage: list[dict[str, Any]] = []
+    truncated = 0
+
+    def append_edge(edge: dict[str, Any]) -> None:
+        nonlocal truncated
+        if len(lineage) < MAX_MEMORY_LINEAGE_EDGES:
+            lineage.append(edge)
+        else:
+            truncated += 1
+
+    for row in bounded:
+        identity = row.get("id")
+        if not isinstance(identity, str):
+            continue
+        if row.get("kind") == "fact":
+            for source_id in row.get("source_event_ids", []):
+                if isinstance(source_id, str):
+                    source = events_by_id.get(source_id, {})
+                    append_edge(
+                        {
+                            "from_id": identity,
+                            "relation": "source_event",
+                            "to_id": source_id,
+                            "resolved": source_id in event_ids,
+                            "revision": row.get("revision"),
+                            "branch_id": source.get("branch_id"),
+                            "selector_name": source.get("selector_name"),
+                        }
+                    )
+            predecessor = row.get("supersedes_memory_id")
+            if isinstance(predecessor, str):
+                append_edge(
+                    {
+                        "from_id": identity,
+                        "relation": "supersedes",
+                        "to_id": predecessor,
+                        "resolved": any(
+                            item.get("id") == predecessor for item in bounded
+                        ),
+                        "revision": row.get("revision"),
+                        "branch_id": None,
+                        "selector_name": None,
+                    }
+                )
+        else:
+            append_edge(
+                {
+                    "from_id": identity,
+                    "relation": "event_node",
+                    "to_id": identity,
+                    "resolved": True,
+                    "revision": None,
+                    "branch_id": row.get("branch_id"),
+                    "selector_name": row.get("selector_name"),
+                }
+            )
+            parent = row.get("parent_event_id")
+            if isinstance(parent, str):
+                append_edge(
+                    {
+                        "from_id": identity,
+                        "relation": "parent_event",
+                        "to_id": parent,
+                        "resolved": parent in event_ids,
+                        "revision": None,
+                        "branch_id": row.get("branch_id"),
+                        "selector_name": row.get("selector_name"),
+                    }
+                )
+    return {
+        "distributions": {
+            "retention_class": dict(sorted(retention.items())),
+            "selection_reason": dict(sorted(reasons.items())),
+            "decay_profile": dict(sorted(decay.items())),
+            "fact_status": dict(sorted(fact_status.items())),
+        },
+        "lineage": lineage,
+        "lineage_truncated_count": truncated,
+        "record_truncated_count": max(0, len(records) - MAX_MEMORY_DASHBOARD_ROWS),
+    }
 MARKDOWN_ENTITY_ESCAPES = str.maketrans(
     {
         "\\": "&#92;",
@@ -122,9 +237,7 @@ def render_trace_timeline(events: list[dict[str, Any]]) -> str:
         icon = "⚠️" if event["status"] == "warning" else "✓"
         elapsed = event.get("elapsed_ms")
         timing = (
-            f" · {float(elapsed):.0f} ms"
-            if isinstance(elapsed, (int, float))
-            else ""
+            f" · {float(elapsed):.0f} ms" if isinstance(elapsed, (int, float)) else ""
         )
         lines.append(
             f"{icon} <strong>{presentation_text(event['title'])}</strong>"
@@ -138,10 +251,7 @@ def safe_query_error(exc: Exception) -> str:
     """Return an actionable error without exposing dependency internals."""
 
     if isinstance(exc, WorkflowStageError):
-        return (
-            f"Agent stopped during `{exc.stage}`. "
-            f"Query id: `{exc.query_id}`."
-        )
+        return f"Agent stopped during `{exc.stage}`. Query id: `{exc.query_id}`."
     if isinstance(exc, ValueError):
         return "The query or its filters did not pass validation."
     return "Agent execution failed before a terminal response was produced."
@@ -196,9 +306,7 @@ class StreamConsumer:
         """Return the final response or reject an incomplete stream."""
 
         if self.final_response is None:
-            raise RuntimeError(
-                "Workflow stream ended without a terminal response"
-            )
+            raise RuntimeError("Workflow stream ended without a terminal response")
         return self.final_response
 
 
@@ -209,8 +317,7 @@ def main() -> None:
         st = import_module("streamlit")
     except ImportError as exc:
         raise RuntimeError(
-            "Install UI dependencies with `pip install -r "
-            "demo/requirements.txt`."
+            "Install UI dependencies with `pip install -r demo/requirements.txt`."
         ) from exc
 
     st.set_page_config(page_title="Milvus Agent Chat Demo", layout="wide")
@@ -222,13 +329,24 @@ def main() -> None:
 
     def cached_workflow(
         embedding_fingerprint: str,
+        reranker_mode: str,
+        reranker_model: str,
+        reranker_timeout_seconds: str,
         answer_mode: str,
         answer_model: str,
         milvus_uri: str,
         milvus_collection_name: str,
         milvus_memory_collection_name: str,
+        milvus_memory_events_collection_name: str,
+        milvus_memory_facts_collection_name: str,
+        milvus_response_cache_collection_name: str,
         memory_top_k: str,
         memory_ttl_seconds: str,
+        response_cache_enabled: str,
+        response_cache_top_k: str,
+        response_cache_ttl_seconds: str,
+        response_cache_similarity_threshold: str,
+        kb_revision: str,
     ) -> Any:
         """Reuse expensive configured resources across Streamlit reruns."""
 
@@ -237,6 +355,9 @@ def main() -> None:
     cached_workflow = st.cache_resource(cached_workflow)
     workflow = cached_workflow(
         text_embedding_fingerprint(),
+        os.getenv("RERANKER", "auto"),
+        os.getenv("OPENAI_RERANKER_MODEL", ""),
+        os.getenv("OPENAI_RERANKER_TIMEOUT_SECONDS", "10"),
         os.getenv("ANSWER_GENERATOR", "auto"),
         os.getenv("OPENAI_MODEL", ""),
         os.getenv("MILVUS_URI", "http://localhost:19530"),
@@ -245,8 +366,25 @@ def main() -> None:
             "MILVUS_MEMORY_COLLECTION_NAME",
             "conversation_memory",
         ),
+        os.getenv(
+            "MILVUS_MEMORY_EVENTS_COLLECTION_NAME",
+            "memory_events",
+        ),
+        os.getenv(
+            "MILVUS_MEMORY_FACTS_COLLECTION_NAME",
+            "memory_facts",
+        ),
+        os.getenv(
+            "MILVUS_RESPONSE_CACHE_COLLECTION_NAME",
+            "grounded_response_cache",
+        ),
         os.getenv("MEMORY_TOP_K", "3"),
         os.getenv("MEMORY_TTL_SECONDS", "86400"),
+        os.getenv("RESPONSE_CACHE_ENABLED", "true"),
+        os.getenv("RESPONSE_CACHE_TOP_K", "3"),
+        os.getenv("RESPONSE_CACHE_TTL_SECONDS", "259200"),
+        os.getenv("RESPONSE_CACHE_SIMILARITY_THRESHOLD", "0.92"),
+        os.getenv("KB_REVISION", "demo-v1"),
     )
     defaults: dict[str, Any] = {
         "last_response": None,
@@ -277,15 +415,15 @@ def main() -> None:
             st.session_state["messages"] = []
             st.session_state["memory_records"] = []
             st.session_state["memory_error"] = None
-            st.success("Current conversation and session Memory cleared.")
+            st.success(
+                "Current conversation, session Memory, and cached answers cleared."
+            )
 
     for message in st.session_state["messages"]:
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-    question = st.chat_input(
-        "Ask a question; the Agent will select knowledge tools"
-    )
+    question = st.chat_input("Ask a question; the Agent will select knowledge tools")
     if question:
         query_id = f"query_{uuid.uuid4().hex}"
         st.session_state["messages"].append(
@@ -307,6 +445,7 @@ def main() -> None:
             timeline = agent_status.empty()
             answer_slot = st.empty()
             try:
+
                 def answer_stream() -> Iterator[str]:
                     for envelope in workflow.stream(
                         question,
@@ -320,10 +459,7 @@ def main() -> None:
                                 unsafe_allow_html=True,
                             )
                             agent_status.update(
-                                label=(
-                                    "Agent 正在执行 · "
-                                    f"{len(live_events)} steps"
-                                ),
+                                label=(f"Agent 正在执行 · {len(live_events)} steps"),
                                 state="running",
                                 expanded=True,
                             )
@@ -357,9 +493,7 @@ def main() -> None:
                 )
                 st.session_state["last_response"] = response
                 st.session_state["last_error"] = None
-                st.session_state["query_events"][response["query_id"]] = (
-                    live_events
-                )
+                st.session_state["query_events"][response["query_id"]] = live_events
                 st.session_state["messages"].append(
                     {
                         "role": "assistant",
@@ -369,7 +503,7 @@ def main() -> None:
                 )
                 try:
                     st.session_state["memory_records"] = (
-                        workflow.list_memories(
+                        workflow.list_selective_memories(
                             st.session_state["session_id"],
                         )
                     )
@@ -392,24 +526,16 @@ def main() -> None:
     with tabs[0]:
         st.subheader("Answer")
         if response["terminal_status"] == "abstained":
-            st.warning(
-                "Insufficient evidence after retries; no grounded answer."
-            )
+            st.warning("Insufficient evidence after retries; no grounded answer.")
         if response["terminal_status"] == "clarification_required":
-            st.warning(
-                "Please clarify the industry meaning or requested versions."
-            )
+            st.warning("Please clarify the industry meaning or requested versions.")
         generation = response["trace"]["answer_generation"]
         if generation["fallback_active"]:
             st.info(
-                "Deterministic answer fallback active: "
-                f"{generation['fallback_reason']}"
+                f"Deterministic answer fallback active: {generation['fallback_reason']}"
             )
         elif generation["generator_name"] == "openai":
-            st.caption(
-                "Answer generated with OpenAI model: "
-                f"{generation['model']}"
-            )
+            st.caption(f"Answer generated with OpenAI model: {generation['model']}")
         st.write(response["answer"])
         st.subheader("Sources")
         for citation in response["citations"]:
@@ -434,9 +560,9 @@ def main() -> None:
                     {
                         "tools": ", ".join(
                             entry["tool"]
-                            for entry in response[
-                                "retrieval_provenance"
-                            ].get(item["chunk_id"], [])
+                            for entry in response["retrieval_provenance"].get(
+                                item["chunk_id"], []
+                            )
                         ),
                         "rank": item["rank"],
                         "hybrid_score": item["hybrid_score"],
@@ -502,6 +628,23 @@ def main() -> None:
             f"written {memory['written_count']} · "
             f"TTL {memory['ttl_seconds']} seconds"
         )
+        selective = memory.get("selective", {})
+        if selective:
+            st.caption(
+                "Selective Memory: "
+                f"{selective.get('status', 'empty')} · "
+                f"working {selective.get('working_state_count', 0)} · "
+                f"facts {selective.get('durable_fact_count', 0)} · "
+                f"episodes {selective.get('episode_candidate_count', 0)} · "
+                f"conflicts {selective.get('conflict_count', 0)}"
+            )
+            st.caption(
+                "Decay: "
+                f"{selective.get('decay_mode', 'application')} · "
+                f"{', '.join(selective.get('decay_profiles', [])) or 'none'} "
+                "· consolidation "
+                f"{selective.get('consolidation_status', 'not_run')}"
+            )
         if memory["status"] in {"recall_failed", "write_failed"}:
             st.warning(
                 "Memory is temporarily degraded; the validated answer "
@@ -521,6 +664,33 @@ def main() -> None:
         st.subheader("Live records in this session")
         if records:
             st.dataframe(records, use_container_width=True)
+            dashboard = build_selective_memory_dashboard(records)
+            if dashboard["record_truncated_count"]:
+                st.caption(
+                    "Dashboard row limit reached; "
+                    f"{dashboard['record_truncated_count']} records omitted."
+                )
+            st.subheader("Retention and selection distributions")
+            distributions = dashboard["distributions"]
+            distribution_rows = [
+                {"dimension": dimension, "value": value, "count": count}
+                for dimension, values in distributions.items()
+                for value, count in values.items()
+            ]
+            st.dataframe(distribution_rows, use_container_width=True)
+            st.subheader("Complete opaque lineage")
+            if dashboard["lineage"]:
+                st.dataframe(
+                    dashboard["lineage"],
+                    use_container_width=True,
+                )
+                if dashboard["lineage_truncated_count"]:
+                    st.caption(
+                        "Lineage edge limit reached; "
+                        f"{dashboard['lineage_truncated_count']} edges omitted."
+                    )
+            else:
+                st.info("No fact/source, supersession, or parent edges.")
         else:
             st.info("No live Memory records are currently visible.")
 

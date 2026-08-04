@@ -191,6 +191,60 @@ class MemoryStoreTests(unittest.TestCase):
             ["query_live"],
         )
 
+    def test_local_recent_questions_are_newest_live_user_turns(self) -> None:
+        store = ConversationMemoryStore(now_ms=1_000)
+        records = [
+            memory_record(
+                session_id="session_a",
+                turn_id=f"query_{created_at}",
+                role="user",
+                memory_type="short_term",
+                content=f"question {created_at}",
+                created_at=created_at,
+                expires_at=2_000,
+            )
+            for created_at in range(1, 5)
+        ]
+        for record in records:
+            store.upsert_turn([record])
+        store.upsert_turn(
+            [
+                memory_record(
+                    session_id="session_b",
+                    turn_id="query_other",
+                    role="user",
+                    memory_type="short_term",
+                    content="other session",
+                    created_at=10,
+                    expires_at=2_000,
+                )
+            ]
+        )
+        store.upsert_turn(
+            [
+                memory_record(
+                    session_id="session_a",
+                    turn_id="query_expired",
+                    role="user",
+                    memory_type="short_term",
+                    content="expired",
+                    created_at=20,
+                    expires_at=1_000,
+                )
+            ]
+        )
+
+        recent = store.list_recent_user_questions(
+            "session_a",
+            now_ms=1_000,
+            limit=3,
+        )
+
+        self.assertEqual(
+            [item.content for item in recent],
+            ["question 4", "question 3", "question 2"],
+        )
+
     def test_record_and_batch_validation_reject_invalid_state(self) -> None:
         with self.assertRaisesRegex(ValueError, "content"):
             memory_record(content=" ")
@@ -301,9 +355,7 @@ class MemoryStoreTests(unittest.TestCase):
                         now_ms=1_000,
                     )
 
-        client.query_results = [
-            memory_record(session_id="session_other").to_dict()
-        ]
+        client.query_results = [memory_record(session_id="session_other").to_dict()]
         with self.assertRaisesRegex(
             MemoryStoreError,
             "outside the requested scope",
@@ -338,6 +390,47 @@ class MemoryStoreTests(unittest.TestCase):
             client.query_iterator_calls[0]["limit"],
             -1,
         )
+
+    def test_milvus_recent_questions_order_globally_and_filter_role(self) -> None:
+        client = RecordingMemoryClient()
+        store = MilvusConversationMemoryStore(client)
+        client.query_results = [
+            memory_record(
+                turn_id=f"query_{created_at:03d}",
+                role="user",
+                memory_type="short_term",
+                content=f"question {created_at}",
+                created_at=created_at,
+            ).to_dict()
+            for created_at in range(1, 206)
+        ]
+
+        records = store.list_recent_user_questions(
+            "session_memory",
+            now_ms=1_000,
+            limit=3,
+        )
+
+        self.assertEqual(
+            [record.created_at for record in records],
+            [205, 204, 203],
+        )
+        query_filter = client.query_iterator_calls[0]["filter"]
+        self.assertIn('session_id == "session_memory"', query_filter)
+        self.assertIn('memory_type in ["short_term"]', query_filter)
+        self.assertIn('role == "user"', query_filter)
+        self.assertEqual(client.query_iterator_calls[0]["limit"], -1)
+
+        client.query_results = [memory_record(role="summary").to_dict()]
+        with self.assertRaisesRegex(
+            MemoryStoreError,
+            "outside the requested scope",
+        ):
+            store.list_recent_user_questions(
+                "session_memory",
+                now_ms=1_000,
+                limit=3,
+            )
 
 
 class WorkflowMemoryTests(unittest.TestCase):
@@ -388,6 +481,95 @@ class WorkflowMemoryTests(unittest.TestCase):
         self.assertGreater(workflow.clear_memory("session_a"), 0)
         self.assertEqual(workflow.list_memories("session_a"), [])
 
+    def test_recent_three_questions_are_chronological_and_skip_kb(self) -> None:
+        now = [1_000]
+        workflow = AgenticRAGWorkflow(
+            memory_store=ConversationMemoryStore(now_ms=now[0]),
+            selective_memory_enabled=False,
+            response_cache_enabled=False,
+            wall_clock_ms=lambda: now[0],
+        )
+        questions = [
+            "你好，问题一",
+            "你好，问题二",
+            "你好，问题三",
+            "你好，问题四",
+        ]
+        for index, question in enumerate(questions, start=1):
+            now[0] += 1
+            workflow.run(
+                question,
+                session_id="session_recent",
+                query_id=f"query_{index}",
+            )
+        workflow.run(
+            "你好，另一个会话的问题",
+            session_id="session_other",
+            query_id="query_other",
+        )
+
+        now[0] += 1
+        envelopes = list(
+            workflow.stream(
+                "查找下我最近的三个问题是什么",
+                session_id="session_recent",
+                query_id="query_recall",
+            )
+        )
+        response = envelopes[-1]["response"]
+
+        self.assertEqual(response["terminal_status"], "answered_from_memory")
+        self.assertEqual(response["tool_calls"], [])
+        self.assertEqual(response["selected_tools"], [])
+        self.assertEqual(response["citations"], [])
+        self.assertIn("1. 你好，问题四", response["answer"])
+        self.assertIn("2. 你好，问题三", response["answer"])
+        self.assertIn("3. 你好，问题二", response["answer"])
+        self.assertNotIn("问题一", response["answer"])
+        self.assertNotIn("另一个会话", response["answer"])
+        self.assertNotIn("查找下我最近", response["answer"])
+        memory_trace = response["trace"]["memory"]
+        self.assertEqual(memory_trace["recall_decision"], "searched")
+        self.assertEqual(memory_trace["recall_mode"], "chronological")
+        self.assertEqual(memory_trace["recall_reason"], "recent_questions")
+        self.assertEqual(memory_trace["requested_count"], 3)
+        self.assertEqual(memory_trace["memory_types"], ["short_term"])
+        self.assertEqual(memory_trace["recalled_count"], 3)
+        recall_event = next(
+            item["event"]
+            for item in envelopes
+            if item["type"] == "trace_event"
+            and item["event"]["stage"] == "recall_memory"
+        )
+        self.assertEqual(recall_event["details"]["recall_decision"], "searched")
+        self.assertEqual(
+            recall_event["details"]["recall_mode"],
+            "chronological",
+        )
+        self.assertEqual(recall_event["details"]["requested_count"], 3)
+        self.assertEqual(
+            recall_event["details"]["memory_types"],
+            ["short_term"],
+        )
+
+    def test_non_memory_query_trace_reports_skipped_lookup(self) -> None:
+        response = AgenticRAGWorkflow(
+            selective_memory_enabled=False,
+            response_cache_enabled=False,
+            wall_clock_ms=lambda: 1_000,
+        ).run(
+            "你好",
+            session_id="session_skipped",
+            query_id="query_skipped",
+        )
+
+        memory_trace = response["trace"]["memory"]
+        self.assertEqual(memory_trace["recall_decision"], "skipped")
+        self.assertEqual(memory_trace["recall_mode"], "none")
+        self.assertEqual(memory_trace["recall_reason"], "not_applicable")
+        self.assertIsNone(memory_trace["requested_count"])
+        self.assertEqual(memory_trace["memory_types"], [])
+
     def test_followup_uses_prior_topic_but_unrelated_query_does_not(
         self,
     ) -> None:
@@ -412,6 +594,12 @@ class WorkflowMemoryTests(unittest.TestCase):
         self.assertEqual(first["terminal_status"], "answered")
         self.assertTrue(followup["recalled_memories"])
         self.assertEqual(followup["terminal_status"], "answered")
+        self.assertTrue(followup["tool_calls"])
+        self.assertTrue(followup["citations"])
+        self.assertEqual(
+            followup["answer_validation"]["mode"],
+            "citation_self_check",
+        )
         self.assertFalse(unrelated["recalled_memories"])
         self.assertEqual(unrelated["terminal_status"], "abstained")
 
@@ -419,6 +607,7 @@ class WorkflowMemoryTests(unittest.TestCase):
         now = [1_000]
         workflow = AgenticRAGWorkflow(
             memory_ttl_seconds=1,
+            selective_memory_enabled=False,
             wall_clock_ms=lambda: now[0],
         )
         first = workflow.run(
@@ -456,6 +645,33 @@ class WorkflowMemoryTests(unittest.TestCase):
         self.assertEqual(recall_response["memory_status"], "recall_failed")
         self.assertNotIn("secret", str(recall_response["trace"]))
 
+        class RecentRecallFailStore(ConversationMemoryStore):
+            def list_recent_user_questions(
+                self,
+                *args: Any,
+                **kwargs: Any,
+            ) -> list[MemoryRecord]:
+                del args, kwargs
+                raise MemoryStoreError("raw token=secret")
+
+        recent_recall_response = AgenticRAGWorkflow(
+            memory_store=RecentRecallFailStore(),
+            wall_clock_ms=lambda: 1_000,
+        ).run(
+            "查找下我最近的三个问题是什么",
+            session_id="session_failure",
+            query_id="query_recent_recall_failure",
+        )
+        self.assertEqual(
+            recent_recall_response["memory_status"],
+            "recall_failed",
+        )
+        self.assertEqual(
+            recent_recall_response["terminal_status"],
+            "memory_not_found",
+        )
+        self.assertNotIn("secret", str(recent_recall_response["trace"]))
+
         class WriteFailStore(ConversationMemoryStore):
             def upsert_turn(self, records: list[MemoryRecord]) -> int:
                 del records
@@ -491,9 +707,7 @@ class WorkflowMemoryTests(unittest.TestCase):
         )
 
         stages = [
-            item["event"]["stage"]
-            for item in events
-            if item["type"] == "trace_event"
+            item["event"]["stage"] for item in events if item["type"] == "trace_event"
         ]
         self.assertEqual(stages[0], "recall_memory")
         self.assertNotIn("persist_turn_memory", stages)
@@ -505,6 +719,21 @@ class WorkflowMemoryTests(unittest.TestCase):
         for item in events:
             if item["type"] == "trace_event":
                 self.assertNotIn("张三", str(item["event"]))
+
+    def test_default_adapter_delegates_selective_memory_listing(self) -> None:
+        workflow = build_default_workflow()
+        workflow.run(
+            "请记住以后用中文",
+            session_id="session_selective_adapter",
+            query_id="query_selective_adapter",
+        )
+
+        records = workflow.list_selective_memories(
+            "session_selective_adapter",
+        )
+
+        self.assertTrue(records)
+        self.assertTrue(all("preview" not in item for item in records))
 
     def test_cancelled_stream_does_not_persist_current_turn(self) -> None:
         for index, use_default_adapter in enumerate((False, True)):
@@ -564,14 +793,14 @@ class WorkflowMemoryTests(unittest.TestCase):
         )
 
     def test_streamlit_exposes_multiturn_memory_contract(self) -> None:
-        source = Path(
-            "demo/src/agent_workshop_demo/streamlit_app.py"
-        ).read_text(encoding="utf-8")
+        source = Path("demo/src/agent_workshop_demo/streamlit_app.py").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn('"messages": []', source)
         self.assertIn('"Memory"', source)
         self.assertIn("Clear conversation & memory", source)
-        self.assertIn("workflow.list_memories", source)
+        self.assertIn("workflow.list_selective_memories", source)
         self.assertIn("workflow.clear_memory", source)
 
 

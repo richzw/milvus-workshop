@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import sys
@@ -17,7 +18,11 @@ if str(SOURCE_ROOT) not in sys.path:
 from agent_workshop_demo.schema.collections import (
     CONVERSATION_MEMORY_INDEXES,
     DOC_DEDUP_SIGNATURES_INDEXES,
+    GROUNDED_RESPONSE_CACHE_INDEXES,
     KB_CHUNKS_INDEXES,
+    MEMORY_EVENTS_INDEXES,
+    MEMORY_FACTS_INDEXES,
+    MEMORY_CONSOLIDATION_JOURNAL_INDEXES,
 )
 from agent_workshop_demo.schema.pymilvus_adapter import create_indexes
 
@@ -48,12 +53,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print index definitions without connecting to Milvus.",
     )
+    parser.add_argument(
+        "--sparse-compatibility-daat-maxscore",
+        action="store_true",
+        help="Explicit legacy sparse override; default uses Milvus 3 SINDI.",
+    )
     args = parser.parse_args(argv)
     definitions = {
         "kb_chunks": KB_CHUNKS_INDEXES,
         "conversation_memory": CONVERSATION_MEMORY_INDEXES,
+        "memory_events": MEMORY_EVENTS_INDEXES,
+        "memory_facts": MEMORY_FACTS_INDEXES,
+        "memory_consolidation_journal": MEMORY_CONSOLIDATION_JOURNAL_INDEXES,
+        "grounded_response_cache": GROUNDED_RESPONSE_CACHE_INDEXES,
         "doc_dedup_signatures": DOC_DEDUP_SIGNATURES_INDEXES,
     }
+    if args.sparse_compatibility_daat_maxscore:
+        definitions = copy.deepcopy(definitions)
+        definitions["kb_chunks"]["sparse_vector"]["params"] = {
+            "inverted_index_algo": "DAAT_MAXSCORE"
+        }
     if not args.dry_run:
         print(
             json.dumps(
@@ -61,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
                     args.uri,
                     args.token,
                     recreate=args.recreate,
+                    sparse_compatibility_daat_maxscore=(
+                        args.sparse_compatibility_daat_maxscore
+                    ),
                 ),
                 ensure_ascii=False,
                 indent=2,

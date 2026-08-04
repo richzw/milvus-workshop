@@ -1,0 +1,19 @@
+{
+  "schema_version": "chunking-experiment-v1",
+  "configs": [
+    {
+      "name": "focused_24_80",
+      "min_tokens": 24,
+      "max_tokens": 80,
+      "overlap_tokens": 8,
+      "boundary_policy": "paragraph_sentence_v1"
+    },
+    {
+      "name": "broad_48_220",
+      "min_tokens": 48,
+      "max_tokens": 220,
+      "overlap_tokens": 24,
+      "boundary_policy": "paragraph_sentence_v1"
+    }
+  ]
+}

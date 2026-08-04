@@ -1,49 +1,195 @@
 # Agentic RAG Flow
 
-## 精简版：主要流程
+Status: aligned with [`specs/12-agent-workflow.md`](./specs/12-agent-workflow.md) · Last updated: 2026-07-30
+
+本文是当前实现的导览图；节点契约、状态不变量和安全边界以
+[`specs/`](./specs/index.md) 为准。Local runtime 与 LangGraph runtime
+共享同一套 fail-closed transition contract，不各自维护另一份分支逻辑。
+
+## 精简版：目标 Flow
 
 ```mermaid
 flowchart TD
-    START([用户问题]) --> MEMORY["召回当前 Session Memory<br/>仅用于指代和上下文理解"]
-    MEMORY --> UNDERSTAND["问题理解<br/>Intent 分类 · 专业术语解析 · 版本识别"]
+    START([用户问题]) --> VALIDATE["validate_request<br/>校验 question / session_id / query_id / bounds"]
+    VALIDATE --> RECALL["recall_session_context<br/>observable stage: recall_memory<br/>共享 detector 选择 chronological / semantic / none"]
 
-    UNDERSTAND --> ROUTE{"是否需要知识库检索？"}
+    RECALL --> CLASSIFY["classify_and_route<br/>Intent + Query Type + Retrieval Goal"]
+    CLASSIFY -- direct --> BUILD_DIRECT["build_direct_answer<br/>普通对话 · Memory 命令 · 安全拒绝"]
+    CLASSIFY -- retrieval --> RESOLVE["resolve_entities_and_version<br/>observable stage: resolve_terminology"]
 
-    ROUTE -- 否 --> DIRECT["直接处理<br/>普通对话 · Memory 写入/回忆 · 安全拒绝"]
+    RESOLVE -- ambiguous --> CLARIFY["clarification"]
+    RESOLVE -- resolved --> PERMISSION["check_permission"]
+    PERMISSION -- denied --> REFUSAL["refusal"]
+    PERMISSION -- allowed --> CACHE{"try_grounded_cache"}
 
-    ROUTE -- 是 --> PERMISSION["Permission Check"]
-    PERMISSION --> ALLOWED{"允许访问？"}
-    ALLOWED -- 否 --> DENIED["返回权限拒绝"]
+    CACHE -- validated hit --> OUTPUT
+    CACHE -- miss / stale / error --> EXPERIENCE["recall_authorized_experience<br/>仅作私有 planning context"]
+    EXPERIENCE --> PLAN["plan_retrieval<br/>Tool Selection + Rewrite / Decompose"]
+    PLAN --> EXECUTE["execute_tool_plan<br/>Hybrid Retrieval + Merge + Fingerprint"]
 
-    ALLOWED -- 是 --> PLAN["选择知识工具<br/>Query Rewrite / Decompose"]
-    PLAN --> RETRIEVE["Milvus Hybrid Retrieval<br/>Dense + Sparse + Metadata/Version Filters"]
-    RETRIEVE --> RERANK["合并去重与 Rerank"]
-    RERANK --> GRADE{"Evidence 是否充分？"}
+    EXECUTE -- "candidate pool unchanged" --> ABSTAIN["abstain: no_progress"]
+    EXECUTE -- changed --> RERANK["rerank_evidence"]
+    RERANK --> EVALUATE{"evaluate_evidence<br/>Grade + Typed Next Action"}
 
-    GRADE -- 否且可重试 --> RETRY["针对缺失证据补充检索"]
-    RETRY --> RETRIEVE
-    GRADE -- 否且达到上限 --> ABSTAIN["证据不足，安全 Abstain"]
+    EVALUATE -- answer --> GENERATE["generate_candidate_answer"]
+    EVALUATE -- abstain --> GENERATE
+    EVALUATE -- "retry(unique next_plan)" --> RETRY_FP{"retry-plan fingerprint<br/>是否重复？"}
+    RETRY_FP -- duplicate --> ABSTAIN_RETRY["abstain: duplicate_retry_query"]
+    RETRY_FP -- unique --> EXECUTE
 
-    GRADE -- 是 --> GENERATE["基于 Selected KB Chunks 生成答案"]
-    GENERATE --> VERIFY["校验 Citation、事实支撑与文档版本"]
+    ABSTAIN --> GENERATE
+    ABSTAIN_RETRY --> GENERATE
+    GENERATE --> VERIFY["verify_answer<br/>Citation / Memory grounding / Version self-check"]
 
-    DIRECT --> READY["Validated Answer Ready"]
-    DENIED --> READY
-    ABSTAIN --> READY
-    VERIFY --> READY
+    BUILD_DIRECT --> OUTPUT["output_gate"]
+    CLARIFY --> OUTPUT
+    REFUSAL --> OUTPUT
+    VERIFY --> OUTPUT
 
-    READY --> STREAM["Streaming Answer Deltas"]
-    STREAM --> PERSIST["消费完整答案后写入本轮 Memory"]
-    PERSIST --> FINAL["Final Snapshot"]
+    OUTPUT --> STREAM["validated answer_delta"]
+    STREAM --> PERSIST["persist_turn_memory<br/>三个 logical sinks 当前顺序写入"]
+    PERSIST --> FINALIZE["finalize"]
+    FINALIZE --> FINAL([唯一 immutable final snapshot])
 
-    FINAL --> UI["Streamlit UI<br/>Chat · Evidence · Agent Trace · Memory"]
+    classDef decision fill:#fff7e6,stroke:#d48806,color:#5c3b00;
+    classDef terminal fill:#f6ffed,stroke:#52c41a,color:#135200;
+    classDef failure fill:#fff1f0,stroke:#ff4d4f,color:#820014;
+    classDef memory fill:#f9f0ff,stroke:#9254de,color:#391085;
 
-    MEMORY_STORE[("Conversation Memory<br/>Local / Milvus")]
-    KB_STORE[("Milvus Knowledge Base")]
+    class CACHE,EVALUATE,RETRY_FP decision;
+    class FINAL,OUTPUT terminal;
+    class REFUSAL,CLARIFY,ABSTAIN,ABSTAIN_RETRY failure;
+    class RECALL,EXPERIENCE,PERSIST memory;
+```
 
-    MEMORY_STORE -.-> MEMORY
-    PERSIST -.-> MEMORY_STORE
-    KB_STORE -.-> RETRIEVE
+## 详细版：阶段与分支
+
+```mermaid
+flowchart TD
+    START([提交问题]) --> VALIDATE["validate_request<br/>创建 AgentState<br/>绑定 query_id + active session_id"]
+    VALIDATE --> DIRECTIVE{"共享 directive detector"}
+
+    subgraph SESSION["一、Session context"]
+        DIRECTIVE -- "recent questions" --> CHRONO["Chronological recall<br/>live short_term/user · newest first · 1..20"]
+        DIRECTIVE -- "explicit recall / referential follow-up" --> SEMANTIC["Semantic recall<br/>live session_summary / task_state · bounded Top-K"]
+        DIRECTIVE -- "not applicable" --> SKIP["Conversation Memory lookup skipped<br/>Selective Memory router may still run"]
+
+        MEMORY_STORE[("Conversation Memory")]
+        SELECTIVE_STORE[("Selective Memory<br/>events / facts / working state")]
+        MEMORY_STORE -. "session + TTL filter" .-> CHRONO
+        MEMORY_STORE -. "session + TTL filter" .-> SEMANTIC
+        SELECTIVE_STORE -. "typed MemoryPack" .-> SEMANTIC
+        SELECTIVE_STORE -. "typed MemoryPack" .-> SKIP
+
+        CHRONO --> CLASSIFY
+        SEMANTIC --> CLASSIFY
+        SKIP --> CLASSIFY
+    end
+
+    subgraph ROUTING["二、Understand and route"]
+        CLASSIFY["classify_and_route<br/>intent / query_type / retrieval_goal"]
+        CLASSIFY -- direct --> DIRECT["构造 direct / Memory-only / refusal answer"]
+        CLASSIFY -- retrieval --> ENTITY["resolve_terminology<br/>Entity catalog + Version scope"]
+
+        ENTITY_CATALOG[("Predefined Entity Catalog")]
+        ENTITY_CATALOG -. "trusted terminology, not evidence" .-> ENTITY
+
+        ENTITY --> VERSION["current / exact / comparison<br/>Milvus 3.0 → exact v3.0"]
+        VERSION --> AMBIGUOUS{"实体或版本歧义？"}
+        AMBIGUOUS -- 是 --> CLARIFY["clarification_required"]
+        AMBIGUOUS -- 否 --> PERMISSION["check_permission"]
+        PERMISSION --> ALLOWED{"允许当前知识域？"}
+        ALLOWED -- 否 --> DENIED["permission_denied<br/>零 KB/cache search"]
+    end
+
+    subgraph CACHE_AND_EXPERIENCE["三、Cache and authorized experience"]
+        ALLOWED -- 是 --> CACHE["try_grounded_cache<br/>same-session exact / semantic lookup"]
+        CACHE --> CACHE_VALID{"权限、query constraints、TTL、KB revision<br/>live version/checksum/citations 都有效？"}
+        CACHE_VALID -- 是 --> CACHE_HIT["answered_from_cache<br/>跳过 experience / retrieval / rerank / generation"]
+        CACHE_VALID -- 否 --> EXPERIENCE["recall_authorized_experience<br/>permission-scope hash 下的 reusable facts / episodes"]
+
+        RESPONSE_CACHE[("Grounded Response Cache")]
+        EXPERIENCE_STORE[("Selective Experience Store")]
+        RESPONSE_CACHE -.-> CACHE
+        EXPERIENCE_STORE -. "planning hint only" .-> EXPERIENCE
+    end
+
+    subgraph RETRIEVAL["四、Plan and execute retrieval"]
+        EXPERIENCE --> PLAN["plan_retrieval<br/>选择最小工具集合 + 1..3 个 bounded plan items"]
+        PLAN --> PLAN_RULES["保留原始 product / feature / version 术语<br/>记录 dependencies + version scope"]
+        PLAN_RULES --> READY{"ready items 是否独立<br/>且 adapter 声明 supports_parallel_search？"}
+        READY -- 是 --> PARALLEL["bounded parallel read"]
+        READY -- 否 --> SEQUENTIAL["deterministic sequential read"]
+        PARALLEL --> EXECUTE
+        SEQUENTIAL --> EXECUTE
+
+        EXECUTE["execute_tool_plan<br/>Dense + Sparse + Metadata/Version Filters"]
+        KB[("Milvus kb_chunks")]
+        KB -.-> EXECUTE
+
+        EXECUTE --> MERGE["按 chunk_id merge / dedupe<br/>保留 tool + subquery provenance"]
+        MERGE --> EXPAND["Exhaustive query: bounded document sibling expansion"]
+        EXPAND --> CANDIDATE_FP["candidate_pool_fingerprint<br/>chunk/version/checksum/provenance/expansion"]
+        CANDIDATE_FP --> PROGRESS{"supplementary round 有进展？"}
+        PROGRESS -- 否 --> NO_PROGRESS["terminal abstain<br/>stop_reason = no_progress"]
+        PROGRESS -- 是 --> RERANK["rerank_evidence<br/>完整 bounded candidate pool"]
+    end
+
+    subgraph EVIDENCE["五、Evidence loop"]
+        RERANK --> GRADE["evaluate_evidence<br/>Grade + Retry Planning"]
+        GRADE --> BASIS{"Evidence basis"}
+
+        BASIS -- "single_strong_chunk" --> SINGLE["Focused atomic feature only<br/>score ≥ 0.80 + direct section match<br/>single tool/aspect + version isolated"]
+        BASIS -- "multi_chunk_coverage" --> MULTI["≥2 relevant chunks<br/>完整 tool/version coverage"]
+        BASIS -- "insufficient_evidence" --> GAP["真实 missing_aspects<br/>weak / indirect / multi-aspect / tool / version / exhaustive"]
+
+        SINGLE --> ANSWER_ACTION["action = answer"]
+        MULTI --> ANSWER_ACTION
+        GAP --> RETRY_BUDGET{"仍有 retry budget？"}
+        RETRY_BUDGET -- 否 --> EXHAUSTED["action = abstain<br/>retry_exhausted"]
+        RETRY_BUDGET -- 是 --> RETRY_PLAN["构造 next_plan<br/>原始 query + bounded evidence hints"]
+        RETRY_PLAN --> RETRY_FP{"(tool, normalized query, version scope)<br/>fingerprint 是否已存在？"}
+        RETRY_FP -- 是 --> DUPLICATE["action = abstain<br/>duplicate_retry_query<br/>不 append、不调用工具、不增加 retry_count"]
+        RETRY_FP -- 否 --> EXECUTE
+    end
+
+    subgraph ANSWER["六、Answer and output gate"]
+        ANSWER_ACTION --> GENERATE["generate_candidate_answer<br/>只使用 selected live KB chunks"]
+        EXHAUSTED --> GENERATE
+        NO_PROGRESS --> GENERATE
+        DUPLICATE --> GENERATE
+        GENERATE --> VERIFY["verify_answer<br/>inline markers + structured citations<br/>selected context + version policy"]
+        VERIFY --> OUTPUT["output_gate"]
+
+        DIRECT --> OUTPUT
+        CLARIFY --> OUTPUT
+        DENIED --> OUTPUT
+        CACHE_HIT --> OUTPUT
+    end
+
+    subgraph TERMINAL["七、Streaming, persistence and final"]
+        EVENTS["sanitized trace_event stream<br/>节点完成即发送，strict sequence + same query_id"]
+        OUTPUT --> DELTA["validated answer_delta"]
+        DELTA --> CONSUMER{"消费者请求 final？"}
+        CONSUMER -- "取消 / 中断" --> CANCEL["incomplete stream<br/>当前 turn 不持久化"]
+        CONSUMER -- 是 --> PERSIST["persist_turn_memory"]
+
+        PERSIST --> CONVERSATION_SINK["Conversation Memory"]
+        CONVERSATION_SINK --> SELECTIVE_SINK["Selective Memory"]
+        SELECTIVE_SINK --> CACHE_SINK["Grounded Response Cache"]
+        CACHE_SINK --> FINALIZE["finalize metrics + immutable snapshot"]
+        FINALIZE --> FINAL([final])
+    end
+
+    CLASSIFY -.-> EVENTS
+    CACHE -.-> EVENTS
+    EXECUTE -.-> EVENTS
+    GRADE -.-> EVENTS
+    VERIFY -.-> EVENTS
+
+    SEMANTIC -. "只辅助分类、指代和 rewrite" .-> PLAN_RULES
+    SEMANTIC -. "不能授权、构造 filter、成为 citation 或补足 evidence" .-> GRADE
+    EXPERIENCE -. "不能回答或成为 citation" .-> GRADE
 
     classDef decision fill:#fff7e6,stroke:#d48806,color:#5c3b00;
     classDef storage fill:#e6f4ff,stroke:#1677ff,color:#003a8c;
@@ -51,207 +197,58 @@ flowchart TD
     classDef failure fill:#fff1f0,stroke:#ff4d4f,color:#820014;
     classDef memory fill:#f9f0ff,stroke:#9254de,color:#391085;
 
-    class ROUTE,ALLOWED,GRADE decision;
-    class MEMORY_STORE,KB_STORE storage;
-    class FINAL,UI terminal;
-    class DENIED,ABSTAIN failure;
-    class MEMORY,PERSIST memory;
+    class DIRECTIVE,AMBIGUOUS,ALLOWED,CACHE_VALID,READY,PROGRESS,BASIS,RETRY_BUDGET,RETRY_FP,CONSUMER decision;
+    class MEMORY_STORE,SELECTIVE_STORE,ENTITY_CATALOG,RESPONSE_CACHE,EXPERIENCE_STORE,KB storage;
+    class FINAL,OUTPUT terminal;
+    class CLARIFY,DENIED,NO_PROGRESS,EXHAUSTED,DUPLICATE,CANCEL failure;
+    class CHRONO,SEMANTIC,SKIP,EXPERIENCE,PERSIST,CONVERSATION_SINK,SELECTIVE_SINK,CACHE_SINK memory;
 ```
 
-## 详细版：完整流程
+## Evidence 判定规则
 
-```mermaid
-flowchart TD
-    START([用户提交问题]) --> INIT["创建 AgentState<br/>生成 query_id / 绑定 session_id<br/>校验问题与搜索参数"]
+| 问题形态 | 最低回答条件 | 不满足时 |
+| --- | --- | --- |
+| Focused、单一命名功能 | 恰好一条 relevant chunk，rerank score `≥ 0.80`，section 名直接出现在问题中，单工具、单方面、版本匹配且无冲突 | `single_weak_chunk`、`single_indirect_chunk`、`multi_aspect_requires_coverage` 或 coverage gap |
+| 普通多证据问题 | 至少两条 relevant chunks，并覆盖全部 selected tools 与 version scopes | `incomplete_multi_evidence`、`tool:<name>` 或 `version:<scope>` |
+| Exhaustive | 普通多证据条件 + bounded sibling expansion 完整覆盖 | `incomplete_exhaustive_coverage` |
+| Comparison | 每个请求 side 都有证据，同一 document family 的版本覆盖完整 | 缺失 side/tool/version 后 retry 或 abstain |
 
-    %% ==================== Memory Recall ====================
-    subgraph MEMORY_RECALL["阶段一：会话 Memory 召回"]
-        INIT --> RECALL_CHECK{"是否为显式回忆<br/>或指代型追问？"}
+`single_strong_chunk` 只缩窄 atomic feature explanation 的证据数量要求，不降低
+generation、citation 或 version self-check。Conversation Memory、Selective
+Experience 和 Entity catalog 都不能替代 live KB chunk。
 
-        RECALL_CHECK -- 否 --> NO_MEMORY["不注入历史 Memory"]
-        RECALL_CHECK -- 是 --> RECALL["Recall Memory<br/>按 session_id + TTL + memory_type 过滤<br/>Semantic Top-K，默认 Top 3"]
+## Retry 与无进展终止
 
-        MEMORY_STORE[("Conversation Memory<br/>Local / Milvus")]
-        MEMORY_STORE -. "session_summary / task_state" .-> RECALL
+系统使用两个不同 fingerprint：
 
-        RECALL --> RECALL_RESULT{"召回结果"}
-        RECALL_RESULT -- 找到 --> MEMORY_CONTEXT["构造 bounded memory_context<br/>最多约 2,000 字符"]
-        RECALL_RESULT -- 无结果 --> MEMORY_EMPTY["memory_status = empty"]
-        RECALL_RESULT -- Store 异常 --> MEMORY_FAILED["memory_status = recall_failed<br/>安全降级，不影响后续 RAG"]
+- `candidate_pool_fingerprint`：判断一次补充检索是否增加了 chunk、版本、
+  checksum、provenance 或 exhaustive expansion 覆盖；完全不变时立即
+  `no_progress`，不再 rerank。
+- `retry_plan_fingerprint`：在 append/执行补充计划前，对
+  `(tool, NFKC/casefold/whitespace-normalized query, canonical version scope)`
+  计算指纹；重复时立即 `duplicate_retry_query`，且不增加 `retry_count`。
 
-        NO_MEMORY --> CLASSIFY
-        MEMORY_CONTEXT --> CLASSIFY
-        MEMORY_EMPTY --> CLASSIFY
-        MEMORY_FAILED --> CLASSIFY
-    end
+同一 query 的 reranker provider 一旦失败，会 sticky 到 deterministic fallback，
+后续 retry 不再重复等待同一 primary provider。`retry_count` 只统计真正执行的
+supplementary rounds，最大为 3。
 
-    %% ==================== Understanding ====================
-    subgraph UNDERSTANDING["阶段二：问题理解与路由"]
-        CLASSIFY["Intent / Query Type 分类"]
+## Memory、Cache 与持久化边界
 
-        CLASSIFY --> INTENT["识别 Intent<br/>private_knowledge / comparison<br/>permission_sensitive / conversation<br/>operation / memory_write / memory_recall"]
+- Conversation Memory：同 session、TTL-aware；最近问题使用严格时间排序，
+  指代型追问使用 bounded semantic context。
+- Selective Memory：working state、durable facts、episodes 与 conflicts 形成
+  typed `MemoryPack`；permission-scoped experience 只在 cache miss 后召回。
+- Grounded Response Cache：独立 sibling store；只有当前权限、query constraints、
+  KB revision 和 live citation lineage 全部有效才可短路 RAG。
+- 三个 terminal sinks 当前顺序写入。只有 adapter 明确证明 thread safety、
+  deterministic failure precedence 和 cancellation semantics 后才允许并行。
+- `answer_delta` 在验证后、持久化前输出；消费者未请求 `final` 时，本轮不写入。
 
-        INTENT --> QUERY_TYPE["识别 Query Type<br/>architecture / policy / product<br/>general / unknown"]
+## UI 对应关系
 
-        QUERY_TYPE --> ENTITY["专业术语解析<br/>匹配 predefined entity catalog<br/>识别 GO按钮等行业词与同义词"]
-
-        ENTITY_CATALOG[("Predefined Entity Catalog<br/>entity / aliases / comment / domain")]
-        ENTITY_CATALOG -. "可信术语定义" .-> ENTITY
-
-        ENTITY --> VERSION["文档版本范围解析<br/>current / exact / comparison"]
-
-        VERSION --> AMBIGUOUS{"术语或版本<br/>是否存在歧义？"}
-    end
-
-    AMBIGUOUS -- 是 --> CLARIFY["生成澄清问题<br/>terminal_status = clarification_required"]
-    AMBIGUOUS -- 否 --> RETRIEVAL_DECISION{"是否需要<br/>知识库检索？"}
-
-    %% ==================== Non-Retrieval Branches ====================
-    subgraph DIRECT_BRANCHES["阶段三 A：非知识库分支"]
-        RETRIEVAL_DECISION -- "memory_write" --> MEMORY_WRITE["提取需要记住的 statement<br/>准备非承诺式 Memory 处理结果"]
-
-        RETRIEVAL_DECISION -- "memory_recall" --> MEMORY_ANSWER{"是否召回到有效 Memory？"}
-        MEMORY_ANSWER -- 是 --> MEMORY_GROUNDED["根据同 session Memory 回答<br/>不生成 KB citation"]
-        MEMORY_ANSWER -- 否 --> MEMORY_NOT_FOUND["提示当前会话没有匹配记忆"]
-
-        RETRIEVAL_DECISION -- "conversation" --> DIRECT_ANSWER["普通对话直接回答"]
-
-        RETRIEVAL_DECISION -- "operation" --> SAFE_REFUSAL["拒绝修改、删除、审批等操作<br/>Workshop 只支持只读查询"]
-    end
-
-    %% ==================== RAG Branch ====================
-    subgraph RAG["阶段三 B：Agentic RAG 检索流程"]
-        RETRIEVAL_DECISION -- "需要检索" --> PERMISSION["Permission Check<br/>在任何私有知识搜索之前执行"]
-
-        PERMISSION --> PERMISSION_RESULT{"是否允许访问？"}
-        PERMISSION_RESULT -- 否 --> PERMISSION_DENIED["返回安全拒绝<br/>不执行检索与生成"]
-        PERMISSION_RESULT -- 是 --> TOOL_SELECTION["Tool Selection<br/>选择最小相关工具集合"]
-
-        TOOL_SELECTION --> TOOL_LIST["可用工具<br/>search_policy_docs<br/>search_product_docs<br/>search_meeting_notes<br/>search_code_docs<br/>summarize_document"]
-
-        TOOL_LIST --> PLAN["Query Rewrite / Decompose<br/>生成 1～3 个 bounded subqueries"]
-
-        PLAN --> PLAN_CONTEXT["改写依据<br/>原始问题 + Entity definitions<br/>Version scope + bounded Memory context"]
-
-        PLAN_CONTEXT --> DEPENDENCY{"是否存在<br/>Multi-hop 依赖？"}
-        DEPENDENCY -- 是 --> DEPENDENT_PLAN["先执行无依赖 subquery<br/>根据第一跳证据补全后续 query"]
-        DEPENDENCY -- 否 --> READY_PLAN["所有 subquery 可并行执行"]
-
-        DEPENDENT_PLAN --> RETRIEVE
-        READY_PLAN --> RETRIEVE
-
-        RETRIEVE["执行知识工具<br/>Milvus Hybrid Retrieval"]
-
-        MILVUS[("Milvus KB Chunks")]
-        MILVUS -.-> DENSE["Dense Vector Search"]
-        MILVUS -.-> SPARSE["Sparse / BM25 Search"]
-        MILVUS -.-> FILTER["Metadata Filter<br/>department / doc_type<br/>doc_version / is_current"]
-        DENSE --> RETRIEVE
-        SPARSE --> RETRIEVE
-        FILTER --> RETRIEVE
-
-        RETRIEVE --> MERGE["合并多工具候选结果<br/>按 chunk_id 去重<br/>保留 tool/query provenance"]
-
-        MERGE --> VERSION_GUARD["版本隔离检查<br/>普通查询只保留一个版本<br/>Comparison 按版本分区"]
-
-        VERSION_GUARD --> RERANK["Rerank Evidence<br/>计算 rerank_score<br/>选择候选上下文"]
-
-        RERANK --> GRADE["Grade Evidence<br/>评估 covered / missing aspects<br/>contradictions / version coverage"]
-
-        GRADE --> ENOUGH{"Evidence 是否充分？"}
-
-        ENOUGH -- 是 --> GENERATE
-        ENOUGH -- 否 --> RETRY_CHECK{"retry_count<br/>是否小于 3？"}
-
-        RETRY_CHECK -- 是 --> SUPPLEMENT["Prepare Supplementary Retrieval<br/>只针对 missing aspects<br/>保留之前已找到的证据"]
-        SUPPLEMENT --> RETRIEVE
-
-        RETRY_CHECK -- 否 --> ABSTAIN["生成证据不足的 Abstention<br/>不编造答案"]
-        ABSTAIN --> VERIFY
-
-        GENERATE["Generate Answer<br/>最多使用 5 个 selected chunks"]
-
-        GENERATE_CONTEXT["生成上下文<br/>user_query<br/>entity_info：仅用于术语理解<br/>memory_context：仅用于指代消解<br/>KB contexts：唯一 citation source<br/>version_scope"]
-
-        GENERATE_CONTEXT --> GENERATE
-        GENERATE --> VERIFY["Verify Answer / Self-check<br/>校验 citation、selected context<br/>版本范围、inline marker 与事实支撑"]
-
-        VERIFY --> VALID{"答案验证是否通过？"}
-        VALID -- 否 --> GENERATION_FAILURE["拒绝暴露未验证答案<br/>返回安全错误或 fallback"]
-        VALID -- 是 --> ANSWER_READY["Validated Answer Ready"]
-    end
-
-    %% ==================== Direct Answer Validation ====================
-    CLARIFY --> DIRECT_VALIDATED["构造并标记合法 Terminal Answer"]
-    MEMORY_WRITE --> DIRECT_VALIDATED
-    MEMORY_GROUNDED --> DIRECT_VALIDATED
-    MEMORY_NOT_FOUND --> DIRECT_VALIDATED
-    DIRECT_ANSWER --> DIRECT_VALIDATED
-    SAFE_REFUSAL --> DIRECT_VALIDATED
-    PERMISSION_DENIED --> DIRECT_VALIDATED
-
-    DIRECT_VALIDATED --> ANSWER_READY
-
-    %% ==================== Streaming and Persistence ====================
-    subgraph STREAMING["阶段四：安全 Streaming 与 Memory 持久化"]
-        ANSWER_READY --> TRACE_DONE["完成可公开 Agent Trace<br/>只包含安全状态、数量与耗时<br/>不包含 prompt / Memory content / CoT"]
-
-        TRACE_DONE --> ANSWER_DELTA["Streaming answer_delta<br/>输出已经验证的答案分块"]
-
-        ANSWER_DELTA --> CONSUMER{"消费者是否继续<br/>请求 final？"}
-
-        CONSUMER -- "取消或连接中断" --> CANCELLED["结束 incomplete stream<br/>不写入当前 turn Memory"]
-
-        CONSUMER -- 是 --> PERSIST["Persist Turn Memory<br/>在生成 final 的同一次推进中执行"]
-
-        PERSIST --> BUILD_MEMORY["构建本轮记录<br/>user short_term<br/>assistant short_term<br/>session_summary<br/>可选 task_state"]
-
-        BUILD_MEMORY --> MEMORY_UPSERT["按 session_id + query_id<br/>幂等 Upsert"]
-
-        MEMORY_UPSERT --> MEMORY_STORE
-
-        MEMORY_UPSERT --> WRITE_RESULT{"Memory 写入结果"}
-        WRITE_RESULT -- 成功 --> SAVED["memory_status = saved"]
-        WRITE_RESULT -- "普通回答写入失败" --> WRITE_FAILED["memory_status = write_failed<br/>保留已验证回答"]
-        WRITE_RESULT -- "显式记忆请求写入失败" --> MEMORY_WRITE_FAILED["terminal_status = memory_write_failed<br/>不向用户误报保存成功"]
-
-        SAVED --> FINAL
-        WRITE_FAILED --> FINAL
-        MEMORY_WRITE_FAILED --> FINAL
-    end
-
-    %% ==================== Final Response ====================
-    subgraph FINAL_OUTPUT["阶段五：Final Snapshot 与 UI"]
-        FINAL["输出唯一 final envelope<br/>Immutable Response Snapshot"]
-
-        FINAL --> RESPONSE["最终结果<br/>answer / citations<br/>terminal_status / version_scope<br/>tool_calls / retrieval provenance<br/>reranked evidence / grading<br/>Memory status / metrics / trace"]
-
-        RESPONSE --> UI["Streamlit UI"]
-
-        UI --> CHAT_TAB["Chat<br/>多轮问题与回答"]
-        UI --> EVIDENCE_TAB["Evidence<br/>召回、Rerank、Citation、版本"]
-        UI --> TRACE_TAB["Agent Trace<br/>动态安全执行时间线"]
-        UI --> MEMORY_TAB["Memory<br/>召回记录、写入状态、TTL<br/>清除当前 session Memory"]
-    end
-
-    %% ==================== Trust Boundaries ====================
-    MEMORY_CONTEXT -. "只能辅助分类、指代消解和 Query Rewrite" .-> PLAN_CONTEXT
-    MEMORY_CONTEXT -. "不能授权工具或修改 filters" .-> PERMISSION
-    MEMORY_CONTEXT -. "不能成为 citation 或补足 KB evidence" .-> GRADE
-
-    ENTITY -. "只提供术语解释，不是证据" .-> GENERATE_CONTEXT
-    VERSION -. "控制检索和引用的版本边界" .-> FILTER
-
-    classDef decision fill:#fff7e6,stroke:#d48806,color:#5c3b00;
-    classDef storage fill:#e6f4ff,stroke:#1677ff,color:#003a8c;
-    classDef terminal fill:#f6ffed,stroke:#52c41a,color:#135200;
-    classDef failure fill:#fff1f0,stroke:#ff4d4f,color:#820014;
-    classDef memory fill:#f9f0ff,stroke:#9254de,color:#391085;
-    classDef process fill:#f5f5f5,stroke:#595959,color:#262626;
-
-    class RECALL_CHECK,RECALL_RESULT,AMBIGUOUS,RETRIEVAL_DECISION,MEMORY_ANSWER,PERMISSION_RESULT,DEPENDENCY,ENOUGH,RETRY_CHECK,VALID,CONSUMER,WRITE_RESULT decision;
-    class MEMORY_STORE,ENTITY_CATALOG,MILVUS storage;
-    class FINAL,RESPONSE,UI,CHAT_TAB,EVIDENCE_TAB,TRACE_TAB,MEMORY_TAB terminal;
-    class MEMORY_FAILED,PERMISSION_DENIED,GENERATION_FAILURE,WRITE_FAILED,MEMORY_WRITE_FAILED,CANCELLED failure;
-    class RECALL,MEMORY_CONTEXT,MEMORY_WRITE,MEMORY_GROUNDED,MEMORY_NOT_FOUND,PERSIST,BUILD_MEMORY,MEMORY_UPSERT,SAVED memory;
-```
+- **Chat**：validated answer、citation markers 和 terminal state。
+- **Evidence**：tool recall、rerank、selected context、version 与 coverage。
+- **Agent Trace**：同一 `query_id` 下的真实 stage/tool/retry events；Raw JSON
+  仅在 Advanced expander。
+- **Memory**：本轮 recall/write/cache 状态、live session records、retention /
+  selection distributions，以及只暴露 opaque ids 的完整 lineage。

@@ -51,6 +51,24 @@ KB_CHUNKS_COLLECTION: dict[str, Any] = {
         {"name": "page_no", "type": "Int32", "nullable": True},
         {"name": "chunk_index", "type": "Int32", "nullable": False},
         varchar("text", 16384, False, "Retrieval and citation text."),
+        varchar("retrieval_text", 32768, False, "BM25 Function input.")
+        | {
+            "enable_analyzer": True,
+            "analyzer_params": {
+                "tokenizer": "standard",
+                "filter": [
+                    "lowercase",
+                    {
+                        "type": "synonym",
+                        "synonyms": [
+                            "object storage, s3, minio",
+                            "vector database, vector db",
+                            "full text, bm25",
+                        ],
+                    },
+                ],
+            },
+        },
         varchar("text_summary", 2048, True, "Bounded UI snippet."),
         varchar("language", 16, False, "zh/en/mixed."),
         varchar("department", 64, False, "Metadata filter value."),
@@ -89,6 +107,15 @@ KB_CHUNKS_COLLECTION: dict[str, Any] = {
             "nullable": True,
         },
     ],
+    "functions": [
+        {
+            "name": "bm25_function",
+            "type": "BM25",
+            "input_fields": ["retrieval_text"],
+            "output_fields": ["sparse_vector"],
+            "params": {},
+        }
+    ],
 }
 
 KB_ENUMS = {
@@ -107,8 +134,8 @@ KB_CHUNKS_INDEXES = {
     },
     "sparse_vector": {
         "index_type": "SPARSE_INVERTED_INDEX",
-        "metric_type": "IP",
-        "params": {"inverted_index_algo": "DAAT_MAXSCORE"},
+        "metric_type": "BM25",
+        "params": {},
     },
     "image_vector": {
         "index_type": "HNSW",
@@ -142,7 +169,7 @@ KB_CHUNKS_SEARCH_DEFAULTS = {
     "sparse_search": {
         "field": "sparse_vector",
         "top_k": 20,
-        "metric_type": "IP",
+        "metric_type": "BM25",
     },
     "hybrid": {
         "milvus_top_k": 20,
@@ -155,6 +182,7 @@ KB_CHUNKS_SEARCH_DEFAULTS = {
         "is_current": True,
     },
     "order_by": ["updated_at desc", "priority desc"],
+    "order_mode": "relevance",
 }
 
 CONVERSATION_MEMORY_COLLECTION: dict[str, Any] = {
@@ -174,7 +202,7 @@ CONVERSATION_MEMORY_COLLECTION: dict[str, Any] = {
         varchar("summary", 2048, True, "Optional summary."),
         varchar("memory_type", 32, False, "Memory type."),
         {"name": "created_at", "type": "Int64", "nullable": False},
-        {"name": "expires_at", "type": "Int64", "nullable": True},
+        {"name": "expires_at", "type": "TIMESTAMPTZ", "nullable": True},
         {"name": "metadata", "type": "JSON", "nullable": True},
         {
             "name": "content_vector",
@@ -183,6 +211,7 @@ CONVERSATION_MEMORY_COLLECTION: dict[str, Any] = {
             "nullable": False,
         },
     ],
+    "properties": {"ttl_field": "expires_at"},
 }
 
 CONVERSATION_MEMORY_ENUMS = {
@@ -206,6 +235,296 @@ CONVERSATION_MEMORY_INDEXES = {
     ],
 }
 
+MEMORY_EVENTS_COLLECTION: dict[str, Any] = {
+    "collection_name": COLLECTION_NAMES["memory_events"],
+    "description": "Append-only selective-Memory episode lineage",
+    "fields": [
+        varchar("event_id", 128, False, "Stable immutable event identity.")
+        | {"primary_key": True, "auto_id": False},
+        varchar("session_id", 128, False, "Session scope."),
+        varchar("query_id", 128, True, "Producing query identity."),
+        varchar("turn_id", 128, True, "Producing turn identity."),
+        varchar("parent_event_id", 128, True, "Parent lineage event."),
+        varchar("branch_id", 128, False, "Event branch; main in M4."),
+        varchar("event_type", 64, False, "Registered event type."),
+        varchar("content", 8192, False, "Bounded event payload."),
+        varchar("summary", 2048, True, "Bounded outcome summary."),
+        varchar("outcome", 128, True, "Terminal outcome code."),
+        {"name": "event_time", "type": "Int64", "nullable": False},
+        {"name": "expires_at", "type": "TIMESTAMPTZ", "nullable": True},
+        {"name": "salience_score", "type": "Float", "nullable": False},
+        {
+            "name": "selection_reason",
+            "type": "JSON",
+            "nullable": False,
+        },
+        varchar(
+            "retention_class",
+            32,
+            False,
+            "ephemeral/candidate/protected.",
+        ),
+        varchar("decay_profile", 64, False, "Registered profile name."),
+        varchar(
+            "selector_name",
+            64,
+            False,
+            "Rule/model selector implementation.",
+        ),
+        varchar(
+            "selector_model",
+            120,
+            True,
+            "Optional bounded selector model name.",
+        ),
+        varchar(
+            "selector_fallback_reason",
+            64,
+            True,
+            "Sanitized selector fallback reason.",
+        ),
+        varchar(
+            "permission_scope_hash",
+            64,
+            False,
+            "Opaque scope digest.",
+        ),
+        varchar(
+            "workflow_version",
+            128,
+            False,
+            "Selection/consolidation contract version.",
+        ),
+        varchar("checksum", 64, False, "Payload SHA-256."),
+        {
+            "name": "content_vector",
+            "type": "FloatVector",
+            "dim": VECTOR_DIMS["TEXT_DIM"],
+            "nullable": False,
+        },
+    ],
+    "properties": {"ttl_field": "expires_at"},
+}
+
+MEMORY_EVENTS_INDEXES = {
+    "content_vector": {
+        "index_type": "HNSW",
+        "metric_type": "COSINE",
+        "params": {"M": 16, "efConstruction": 200},
+    },
+    "scalar_indexes": [
+        "session_id",
+        "query_id",
+        "turn_id",
+        "event_type",
+        "event_time",
+        "expires_at",
+        "retention_class",
+        "decay_profile",
+        "permission_scope_hash",
+    ],
+}
+
+MEMORY_FACTS_COLLECTION: dict[str, Any] = {
+    "collection_name": COLLECTION_NAMES["memory_facts"],
+    "description": "Versioned selective-Memory fact projection",
+    "fields": [
+        varchar("memory_id", 128, False, "Stable fact-revision identity.")
+        | {"primary_key": True, "auto_id": False},
+        varchar("session_id", 128, False, "Session scope."),
+        varchar("memory_type", 64, False, "Registered fact type."),
+        varchar("subject", 256, False, "Typed fact subject."),
+        varchar("predicate", 256, False, "Typed fact predicate."),
+        varchar("value", 8192, False, "Bounded fact value."),
+        varchar("status", 32, False, "Fact projection status."),
+        {"name": "confidence", "type": "Float", "nullable": False},
+        {"name": "revision", "type": "Int32", "nullable": False},
+        {
+            "name": "source_event_ids",
+            "type": "JSON",
+            "nullable": False,
+        },
+        varchar(
+            "supersedes_memory_id",
+            128,
+            True,
+            "Previous fact revision.",
+        ),
+        {"name": "valid_from", "type": "Int64", "nullable": False},
+        {"name": "valid_to", "type": "Int64", "nullable": True},
+        {
+            "name": "last_confirmed_at",
+            "type": "Int64",
+            "nullable": False,
+        },
+        {"name": "expires_at", "type": "TIMESTAMPTZ", "nullable": True},
+        {"name": "salience_score", "type": "Float", "nullable": False},
+        varchar(
+            "permission_scope_hash",
+            64,
+            False,
+            "Opaque scope digest.",
+        ),
+        {
+            "name": "content_vector",
+            "type": "FloatVector",
+            "dim": VECTOR_DIMS["TEXT_DIM"],
+            "nullable": False,
+        },
+    ],
+    "properties": {"ttl_field": "expires_at"},
+}
+
+MEMORY_FACTS_INDEXES = {
+    "content_vector": {
+        "index_type": "HNSW",
+        "metric_type": "COSINE",
+        "params": {"M": 16, "efConstruction": 200},
+    },
+    "scalar_indexes": [
+        "session_id",
+        "memory_type",
+        "subject",
+        "predicate",
+        "status",
+        "revision",
+        "last_confirmed_at",
+        "expires_at",
+        "permission_scope_hash",
+    ],
+}
+
+MEMORY_CONSOLIDATION_JOURNAL_COLLECTION: dict[str, Any] = {
+    "collection_name": COLLECTION_NAMES["memory_consolidation_journal"],
+    "description": "Recoverable selective-Memory consolidation outbox",
+    "fields": [
+        varchar("operation_id", 128, False, "Stable consolidation identity.")
+        | {"primary_key": True, "auto_id": False},
+        varchar("session_id", 128, False, "Session scope."),
+        varchar("trigger_event_id", 128, False, "Trigger event identity."),
+        {"name": "source_event_ids", "type": "JSON", "nullable": False},
+        {"name": "plan_metadata", "type": "JSON", "nullable": False},
+        {"name": "fact_update_0", "type": "JSON", "nullable": False},
+        {"name": "fact_update_1", "type": "JSON", "nullable": True},
+        {"name": "fact_update_count", "type": "Int32", "nullable": False},
+        varchar("fact_vector_0", 12000, False, "Base64 IEEE-754 float64 vector."),
+        varchar("fact_vector_1", 12000, False, "Base64 IEEE-754 float64 vector."),
+        {"name": "lifecycle_event", "type": "JSON", "nullable": False},
+        varchar(
+            "lifecycle_vector",
+            12000,
+            False,
+            "Base64 IEEE-754 float64 vector.",
+        ),
+        {
+            "name": "journal_anchor_vector",
+            "type": "FloatVector",
+            "dim": 2,
+            "nullable": False,
+            "description": (
+                "Non-semantic Milvus collection anchor; never used for recall."
+            ),
+        },
+        varchar("status", 16, False, "pending/applied."),
+        {"name": "attempts", "type": "Int32", "nullable": False},
+        {"name": "created_at", "type": "Int64", "nullable": False},
+        {"name": "updated_at", "type": "Int64", "nullable": False},
+        varchar("last_error_code", 32, True, "Registered failure code."),
+    ],
+}
+
+MEMORY_CONSOLIDATION_JOURNAL_INDEXES = {
+    "journal_anchor_vector": {
+        "index_type": "AUTOINDEX",
+        "metric_type": "COSINE",
+        "params": {},
+    },
+    "scalar_indexes": [
+        "session_id",
+        "trigger_event_id",
+        "status",
+        "created_at",
+        "updated_at",
+    ],
+}
+
+GROUNDED_RESPONSE_CACHE_COLLECTION: dict[str, Any] = {
+    "collection_name": COLLECTION_NAMES["grounded_response_cache"],
+    "description": "Session-scoped citation-validated response cache",
+    "fields": [
+        {
+            "name": "cache_id",
+            "type": "VarChar",
+            "max_length": 128,
+            "nullable": False,
+            "primary_key": True,
+            "auto_id": False,
+            "description": "Stable cache identity.",
+        },
+        varchar("session_id", 128, False, "Session scope."),
+        varchar("source_query_id", 128, False, "Producing query identity."),
+        varchar("normalized_query", 8192, False, "Normalized query."),
+        varchar("query_hash", 64, False, "Normalized query SHA-256."),
+        varchar(
+            "embedding_fingerprint",
+            256,
+            False,
+            "Query vector-space identity.",
+        ),
+        varchar("intent", 32, False, "Validated intent."),
+        varchar("query_type", 32, False, "Validated query topic."),
+        varchar("retrieval_goal", 16, False, "focused/exhaustive."),
+        {"name": "version_scope", "type": "JSON", "nullable": False},
+        {"name": "entity_ids", "type": "JSON", "nullable": False},
+        {"name": "query_constraints", "type": "JSON", "nullable": False},
+        varchar(
+            "permission_scope_hash",
+            64,
+            False,
+            "Current permission-scope digest.",
+        ),
+        varchar("kb_revision", 128, False, "Corpus publication id."),
+        varchar(
+            "workflow_version",
+            128,
+            False,
+            "Cache validation contract id.",
+        ),
+        varchar("answer", 12000, False, "Validated grounded answer."),
+        {"name": "citations", "type": "JSON", "nullable": False},
+        {"name": "evidence", "type": "JSON", "nullable": False},
+        {"name": "created_at", "type": "Int64", "nullable": False},
+        {"name": "expires_at", "type": "TIMESTAMPTZ", "nullable": False},
+        {
+            "name": "query_vector",
+            "type": "FloatVector",
+            "dim": VECTOR_DIMS["TEXT_DIM"],
+            "nullable": False,
+        },
+    ],
+    "properties": {"ttl_field": "expires_at"},
+}
+
+GROUNDED_RESPONSE_CACHE_INDEXES = {
+    "query_vector": {
+        "index_type": "HNSW",
+        "metric_type": "COSINE",
+        "params": {"M": 16, "efConstruction": 200},
+    },
+    "scalar_indexes": [
+        "session_id",
+        "query_hash",
+        "intent",
+        "query_type",
+        "retrieval_goal",
+        "permission_scope_hash",
+        "kb_revision",
+        "workflow_version",
+        "created_at",
+        "expires_at",
+    ],
+}
+
 DOC_DEDUP_SIGNATURES_COLLECTION: dict[str, Any] = {
     "collection_name": COLLECTION_NAMES["doc_dedup_signatures"],
     "description": "P2 experimental dedup signatures",
@@ -221,16 +540,37 @@ DOC_DEDUP_SIGNATURES_COLLECTION: dict[str, Any] = {
         varchar("source_uri", 1024, False, "Source URI."),
         varchar("source_type", 32, False, "local/s3/mfs."),
         varchar("record_level", 32, False, "doc/chunk."),
-        varchar("normalized_text", 16384, False, "Normalized text."),
+        varchar("normalized_text", 16384, False, "Normalized text.")
+        | {
+            "enable_analyzer": True,
+            "analyzer_params": {
+                "tokenizer": "standard",
+                "filter": ["lowercase"],
+            },
+        },
         varchar("checksum", 128, False, "Exact checksum."),
         {
             "name": "minhash_signature",
             "type": "BinaryVector",
-            "dim": VECTOR_DIMS["MINHASH_DIM"],
+            "dim": 8192,
             "nullable": False,
         },
         {"name": "created_at", "type": "Int64", "nullable": False},
         {"name": "metadata", "type": "JSON", "nullable": True},
+    ],
+    "functions": [
+        {
+            "name": "minhash_function",
+            "type": "MINHASH",
+            "input_fields": ["normalized_text"],
+            "output_fields": ["minhash_signature"],
+            "params": {
+                "num_hashes": 256,
+                "shingle_size": 3,
+                "seed": 1234,
+                "token_level": "word",
+            },
+        }
     ],
 }
 
@@ -241,10 +581,13 @@ DOC_DEDUP_ENUMS = {
 
 DOC_DEDUP_SIGNATURES_INDEXES = {
     "minhash_signature": {
-        "index_type": "BIN_FLAT",
-        "metric_type": "HAMMING",
-        "params": {},
-        "note": "P2 experimental binary signature index.",
+        "index_type": "MINHASH_LSH",
+        "metric_type": "MHJACCARD",
+        "params": {
+            "mh_element_bit_width": 32,
+            "mh_lsh_band": 128,
+            "with_raw_data": True,
+        },
     },
     "scalar_indexes": [
         "doc_id",

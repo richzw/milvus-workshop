@@ -1,6 +1,6 @@
 # 12 — Agentic RAG Workflow
 
-Status: draft v3 · Owner: workshop author · Depends on: [`10-data-model.md`](./10-data-model.md), [`11-ingestion.md`](./11-ingestion.md)
+Status: draft v4 · Owner: workshop author · Depends on: [`10-data-model.md`](./10-data-model.md), [`10b-conversation-memory.md`](./10b-conversation-memory.md), [`10c-grounded-response-cache.md`](./10c-grounded-response-cache.md), [`10d-selective-agent-memory.md`](./10d-selective-agent-memory.md), [`11-ingestion.md`](./11-ingestion.md)
 
 ## 1. Purpose
 
@@ -14,15 +14,15 @@ Status: draft v3 · Owner: workshop author · Depends on: [`10-data-model.md`](.
 └──────────────────────────┬─────────────────────────────────┘
                            ▼
 ┌──────────────────── Agent planning boundary ───────────────┐
-│ recall session memory ─▶ classify intent/topic ─▶ resolve  │
-│                              │ matched entity info          │
+│ recall session context ─▶ classify_and_route               │
+│                  direct ─▶ build direct answer              │
+│               retrieval ─▶ resolve entity/version           │
 │                              ▼                              │
-│                         decide retrieval                    │
-│          │ private knowledge                               │
-│          ▼                                                 │
-│ get_user_permission ─▶ select tools ─▶ rewrite/decompose   │
-│          │ denied                    │ 1..3 subqueries      │
-│          └──────────────▶ refuse     ▼                     │
+│ get_user_permission ─▶ try_grounded_cache                  │
+│          │ denied              │ miss                       │
+│          └─▶ refuse            ▼                            │
+│       recall authorized experience ─▶ plan_retrieval        │
+│                                      │ 1..3 subqueries      │
 └──────────────────────────┬─────────────────────────────────┘
                            ▼ tool calls with private/version filters
 ┌──────────────────── Retrieval boundary ────────────────────┐
@@ -36,10 +36,12 @@ Status: draft v3 · Owner: workshop author · Depends on: [`10-data-model.md`](.
 └──────────────────────────┬─────────────────────────────────┘
                            ▼
 ┌──────────────────── Evidence loop ─────────────────────────┐
-│ grade coverage / contradictions / missing aspects          │
-│   ├─ enough ─────────────▶ generate answer                 │
-│   ├─ missing dependency ─▶ choose next tool/query          │
-│   └─ retry exhausted ────▶ structured abstain              │
+│ evaluate_evidence: grade + choose typed next action         │
+│   ├─ focused + one strong/direct chunk ─┐                  │
+│   ├─ complete multi-chunk coverage ─────┴─▶ generate answer│
+│   ├─ retry(unique next_plan) ─────────────▶ execute plan   │
+│   ├─ duplicate retry fingerprint ─────────▶ abstain        │
+│   └─ exhausted / insufficient ────────────▶ abstain        │
 └──────────────────────────┬─────────────────────────────────┘
                            ▼
 ┌──────────────────── Answer boundary ───────────────────────┐
@@ -66,10 +68,23 @@ class AgentState(TypedDict):
     user_query: str
     recalled_memories: list[dict]
     memory_context: str
+    memory_pack: dict
     memory_status: str
     memory_written_count: int
+    memory_conflict_count: int
+    memory_decay_profiles: list[str]
+    response_cache_status: str
+    response_cache_candidate_count: int
+    response_cache_match_type: str | None
+    response_cache_similarity: float | None
+    response_cache_source_query_id: str | None
     intent: str
     query_type: str
+    retrieval_goal: str
+    classifier_name: str
+    classifier_model: str | None
+    classification_confidence: float | None
+    classification_fallback_reason: str | None
     entity_catalog_version: str
     matched_entities: list[dict]
     ambiguous_entities: list[dict]
@@ -83,6 +98,9 @@ class AgentState(TypedDict):
     version_scope: dict
     search_filters: dict
     retrieved_chunks: list[dict]
+    reranker_name: str
+    reranker_model: str | None
+    reranker_fallback_reason: str | None
     reranked_chunks: list[dict]
     enough_evidence: bool
     evidence_grade: dict
@@ -97,7 +115,43 @@ class AgentState(TypedDict):
 
 This is a logical shape, not a verified code symbol. `intent` describes the requested action (`conversation`, `private_knowledge`, `comparison`, `operation`, `permission_sensitive`, `memory_write`, `memory_recall`); `query_type` describes the topic (`architecture`, `policy`, `product`, `general`, `unknown`). They are separate because the same topic can require different execution plans.
 
-### 3.1 Streaming event contract
+### 3.1 Shared transition contract
+
+Local generator orchestration and LangGraph conditional edges consume the same
+pure, allow-listed `next_transition(completed_node, state,
+evidence_action=None) -> WorkflowTransition` contract. A transition contains a
+closed `next_node` enum and registered `reason`; arbitrary node names are
+invalid.
+
+The local runtime is a node dispatcher: after every conditional node it assigns
+the returned `next_node` and dispatches that node. It must not call
+`next_transition()` only as a guard and then continue through a separately
+hard-coded Python order. LangGraph maps the same returned enum to a registered
+edge. Unconditional preparation edges may remain explicit in each runtime, but
+neither runtime may duplicate conditional route, terminal or retry policy.
+
+| Completed node | Condition | Next node | Registered reason |
+| --- | --- | --- | --- |
+| `classify_and_route` | direct | `output_gate` | `direct_route` |
+| `classify_and_route` | retrieval | `resolve_terminology` | `retrieval_route` |
+| `resolve_terminology` | ambiguous | `output_gate` | `clarification_required` |
+| `resolve_terminology` | resolved | `check_permission` | `entities_resolved` |
+| `check_permission` | denied | `output_gate` | `permission_denied` |
+| `check_permission` | allowed | `try_grounded_cache` | `permission_allowed` |
+| `try_grounded_cache` | hit | `output_gate` | `cache_hit` |
+| `try_grounded_cache` | miss/stale/error | `recall_authorized_experience` | `cache_miss` |
+| `execute_tool_plan` | fingerprint unchanged | `generate_candidate_answer` | `no_progress` |
+| `execute_tool_plan` | changed | `rerank_evidence` | `evidence_progress` |
+| `evaluate_evidence` | retry | `execute_tool_plan` | `supplementary_retry` |
+| `evaluate_evidence` | answer/abstain | `generate_candidate_answer` | `evidence_terminal` |
+
+The node that establishes a terminal condition owns the corresponding terminal
+state before requesting its transition. The shared contract fail-closes on an
+impossible combination such as a direct route with `terminal_status=running`,
+a denied permission without `permission_denied`, or an evaluation edge without
+an `EvidenceAction`. It does not execute tools or make permission decisions.
+
+### 3.2 Streaming event contract
 
 `stream()` is an ordered execution-event interface, not a post-hoc answer chunker. It yields zero or more sanitized `trace_event` envelopes while nodes complete, then validated `answer_delta` envelopes, and exactly one terminal `final` envelope:
 
@@ -141,15 +195,45 @@ All tools use typed, bounded inputs. `source_type`, `doc_type`, `department`, `h
 
 Search tools share one `HybridRetriever` implementation and differ by policy-owned filter construction. Unless the query explicitly requests an exact version or comparison, every search tool adds `is_current == true`. Tool selection never expands the permission result. Retrieved text is untrusted data and cannot request a new tool, alter filters or authorize itself.
 
+The optional image-retrieval lab extends that adapter with
+`search_image_vector`. A text query can restrict normal hybrid retrieval to
+captioned image records; an uploaded/local image is embedded by the configured
+image provider and searched only against `image_vector`. This lab API and its
+CLI eval runner do not add an image-upload route to the main Agent Chat
+workflow, do not bypass tool-owned permission filters, and do not place image
+bytes or vectors in trace/UI payloads.
+
 ## 5. Node contracts
 
 ### 5.0 `recall_memory`
 
-Before classification, an explicit recall request or bounded referential follow-up searches at most `MEMORY_TOP_K` live `session_summary`/`task_state` records for the active `session_id`. An unrelated standalone question does not inject old Memory. Build a bounded context string without trace content or vectors. Empty recall is normal. A typed store failure records `recall_failed` and continues without memory; it never silently switches persistence backends.
+Before classification, the shared deterministic recall detector chooses exactly one Conversation Memory mode:
 
-### 5.1 `classify_intent`
+- `chronological`: a recent-question request lists the effective `1..20` live `short_term/user` records for the active `session_id`, ordered by `(created_at, turn_id)` descending;
+- `semantic`: another explicit recall request or bounded referential follow-up searches at most `MEMORY_TOP_K` live `session_summary`/`task_state` records;
+- `none`: the Conversation Memory store is not queried.
 
-Classifies both `intent` and `query_type`, records a reason, and sets `need_retrieval`. Greetings and generic capability explanations may answer directly. Explicit remember/recall language selects `memory_write`/`memory_recall` and skips KB retrieval. Private knowledge, comparison and permission-sensitive questions retrieve by default. Operation requests are classified and traced but may only execute tools explicitly present in the catalog; unsupported mutations return a safe refusal. Bounded recalled summaries may clarify a follow-up topic but never grant permission or establish KB evidence.
+Chronological mode is authoritative for temporal language such as “查找下我最近的三个问题是什么”; it does not run ANN search or Selective Memory episode ranking. This stage never queries the grounded-response cache. Typed store failures record sanitized component status and continue safely.
+
+Trace reports `recall_decision`, `recall_mode`, registered `recall_reason`, bounded `requested_count` and the actual `memory_types`. A skipped lookup is distinct from a searched-but-empty result.
+
+This paragraph is the implemented [`10b-conversation-memory.md`](./10b-conversation-memory.md) baseline. The [`10d-selective-agent-memory.md`](./10d-selective-agent-memory.md) cutover replaces summary-only recall with a Memory Router that deterministically loads same-session working state and private context. Permission-scoped reusable experiences are loaded later by `recall_authorized_experience`. Both return a typed `MemoryPack`; response-cache candidates remain a separate private state field owned only by `try_grounded_cache`. Status, session, expiry and permission predicates run before decay ranking. A current event is never visible to its own recall, and a recall hit alone never refreshes lifecycle timestamps.
+
+### 5.1 `classify_and_route`
+
+Delegates classification to the injected
+[`QueryClassifier`](./12a-query-classification.md), records validated `intent`,
+`query_type`, `retrieval_goal` and safe implementation/fallback metadata, then
+returns one typed `QueryRouteResult(route=direct|retrieval, reason)`. Direct
+routes build the bounded direct/Memory/refusal answer in the same workflow
+stage and skip entity resolution, permission and cache. Retrieval routes
+continue to entity/version resolution. `AgenticRAGWorkflow()` uses
+`RuleBasedQueryClassifier`; configured builders use `LLMQueryClassifier`
+wrapped by `FallbackQueryClassifier`. Explicit memory-write, memory-recall and
+operation requests take the deterministic safety fast path. Private knowledge,
+comparison and permission-sensitive questions retrieve by default. Bounded
+recalled summaries may clarify a follow-up topic but never grant permission,
+change an explicit action or establish KB evidence.
 
 ### 5.1a `resolve_terminology`
 
@@ -170,19 +254,95 @@ Here are some word entity definitions to help interpret and rewrite the query.
 
 Runs before any private search tool. The default Workshop implementation authorizes only the synthetic corpus and returns allowed departments. A denied decision terminates without retrieval or generation. This node demonstrates placement and data flow; it is not production authentication or ACL.
 
-### 5.3 `select_tools`
+### 5.2a `try_grounded_cache`
 
-Chooses the smallest relevant set of tools from topic and intent. A simple question normally selects one search tool; a comparison selects two or more. Selection records tool name, reason and intended knowledge domain. The Agent never searches every domain by default.
+Runs only for a grounded-retrieval route after current permission succeeds. It
+performs one bounded same-session exact/semantic candidate lookup and validates
+classification/entity/version constraints, permission-scope hash, TTL,
+KB/workflow revisions, and every cited chunk's live
+version/checksum/current status in the same stage. A hit restores the complete
+answer and citations, sets `answered_from_cache/cached_grounded`, then
+terminates without experience recall, tool, retrieval, rerank or generation
+calls. Any miss, stale candidate or typed cache failure continues to
+`recall_authorized_experience`. Direct, Memory, operation, clarification and
+permission-denied routes never invoke this stage.
 
-### 5.4 `rewrite_and_decompose`
+### 5.2b `recall_authorized_experience`
 
-Produces one to three retrieval subqueries. Each plan item contains `subquery_id`, rewritten query, selected tool, version scope, dependency ids and status. Terminology expansion preserves original intent and incorporates only the resolver's matched entities; each rewrite retains the original surface form or canonical term so exact product vocabulary is not lost. Comparison questions produce parallel subqueries; multi-hop questions may leave a dependent subquery whose text is refined from first-hop evidence.
+Runs only after an allowed grounded-retrieval request misses
+`try_grounded_cache`. It recalls bounded reusable episodes/facts under the
+current permission-scope hash and merges them into private planning context.
+Failure is sanitized and degrades to retrieval without experience context. This
+stage cannot answer, grant permission, alter filters or become citation
+evidence.
 
-For a normal follow-up, the rewritten query may include bounded recalled summaries to resolve pronouns or omitted topic words. The raw rewrite remains private trace data; Memory does not add a new source or permission domain.
+### 5.3 `plan_retrieval`
+
+Combines tool selection and bounded rewrite/decomposition into one typed
+`RetrievalPlanResult(selected_tools, plan_count)`. It chooses the smallest
+relevant set of tools from topic and intent, then produces one to three
+executable plan items. A simple question normally selects one search tool; a
+comparison selects two or more. Selection records tool name, reason and
+intended knowledge domain. The Agent never searches every domain by default,
+and the rewrite step cannot add a tool that selection did not authorize.
+
+The internal rewrite/decompose component produces plan items containing
+`subquery_id`, rewritten query, selected tool, version scope, dependency ids
+and status. Terminology expansion preserves original intent and incorporates
+only the resolver's matched entities; each rewrite retains the original surface
+form or canonical term so exact product vocabulary is not lost. Comparison
+questions produce parallel subqueries; multi-hop questions may leave a
+dependent subquery whose text is refined from first-hop evidence.
+
+Every supplementary rewrite starts with the bounded original user query and
+preserves its named product, feature and version surface forms. It may append
+registered missing-aspect codes, resolved canonical terms and the highest
+relevant chunk's bounded title/section as retrieval hints. Topic-wide templates
+that replace the original subject—such as rewriting every architecture query
+to an S3 ingestion query—are forbidden.
+
+Before a supplementary item is appended, planning computes a deterministic
+`retry_plan_fingerprint` over its registered tool, NFKC/case-folded
+whitespace-normalized query and canonical JSON version scope. A fingerprint
+already present in a completed or pending supplementary item is
+`duplicate_retry_query`: no plan item or tool call is created, `retry_count`
+does not advance, and `evaluate_evidence` returns a terminal abstention. The
+fingerprint includes tool and version scope so the same terms remain legal
+across an intentional cross-tool or cross-version plan.
+
+For a normal follow-up, the rewritten query may include bounded recalled summaries in the baseline or the target `MemoryPack.rendered_context` to resolve pronouns or omitted topic words. The raw rewrite remains private trace data; Memory does not add a new source or permission domain.
 
 ### 5.5 `execute_tool_plan`
 
 Executes ready search plan items, potentially multiple calls in one round, then merges candidates by `chunk_id`. The highest-scoring occurrence owns ranking fields while tool/query provenance is retained in `tool_calls`. Calls are bounded by three initial subqueries and `milvus_top_k` per call.
+
+`execute_tool_plan` is also the canonical observable stage name in latency
+metrics, streaming trace events and dependency-failure attribution. Storage
+engine or retrieval implementation names such as
+`milvus_hybrid_retrieve` remain internal operation names and never appear as
+workflow stages.
+
+Ready plan items with no dependency edge may execute concurrently only when the
+retrieval adapter explicitly declares `supports_parallel_search=true`.
+Concurrency is bounded by both the ready-item count and the initial-plan cap of
+three. Results, tool calls, expansion and provenance are always applied in
+original plan order, so scheduling cannot change fingerprints, trace order or
+answer selection. Adapters without the capability—including the production
+Milvus adapter until its shared-client thread safety is verified—execute
+sequentially. Dependent hops always wait for their prerequisite round.
+
+After every merged round the workflow computes a deterministic
+`candidate_pool_fingerprint` over the evidence state that can affect grading:
+each retained chunk's `chunk_id`, `doc_version`, checksum and sorted registered
+tool provenance, plus the bounded expanded-document chunk ids. Rank and
+provider score are deliberately excluded. If a supplementary round produces
+the same fingerprint as the preceding evaluated round, it has added no new
+evidence or coverage. The workflow records `no_progress`, skips reranking and
+grading that unchanged pool, and terminates as an abstention even when the
+numeric retry cap has not been reached. The initial round can never be
+classified as no-progress.
+
+Queries that explicitly request an exhaustive list, such as “有哪些” or “list all”, use bounded document expansion after the initial semantic seed search. The expansion performs an exact scalar lookup for the seed's `(doc_id, doc_version)`, reapplies the originating tool's source, document-type, department and version filters, and returns siblings in `chunk_index` order. Expansion is capped at `milvus_top_k`, recorded separately from ANN recall in trace, and cannot broaden permission or version scope.
 
 Version scope is part of every plan item and tool call:
 
@@ -192,7 +352,16 @@ Version scope is part of every plan item and tool call:
 
 Normal merge, rerank and selection reject multiple versions of the same `doc_id`. A comparison plan may retain them, but version labels and provenance must remain attached through answer generation.
 
-The deterministic MVP recognizes exact version tokens shaped as `vN`/`vN.N` or `YYYY.MM`, case-insensitively. `current`/`latest`/`当前` select the current edition. One explicit token selects `exact`; two explicit sides combined with comparison intent select `comparison`. Unknown exact versions return no evidence and never fall back. More than two distinct requested versions, or comparison wording without two resolvable sides, returns a clarification request instead of broadening scope.
+The deterministic MVP recognizes exact version tokens shaped as `vN`/`vN.N` or
+`YYYY.MM`, case-insensitively. It also recognizes allow-listed
+product-associated bare semantic versions; initially `Milvus 3.0` normalizes to
+the stored `v3.0`. A free-standing decimal such as `3.0` is not a version
+because it may be a metric or value. `current`/`latest`/`当前` select the current
+edition. One explicit token selects `exact`; two explicit sides combined with
+comparison intent select `comparison`. Unknown exact versions return no
+evidence and never fall back. More than two distinct requested versions, or
+comparison wording without two resolvable sides, returns a clarification
+request instead of broadening scope.
 
 For multi-hop retrieval, a later plan item may depend on facts extracted from earlier evidence. Example:
 
@@ -204,36 +373,109 @@ customer meeting notes ─▶ extract frequent concerns
 
 ### 5.6 `rerank_evidence`
 
-Reranks the merged candidate set against the original user question. It returns stable `old_rank`, `rerank_score` and selection status. A deterministic rule fallback remains explicit in trace.
+Reranks the complete merged candidate set against the original user question before applying `reranker_top_k`. The configured main implementation sends one bounded request to the OpenAI Responses API using strict JSON-schema output. The request contains the bounded question and, for every candidate, only its stable `chunk_id`, title, section and truncated text. Initial and supplementary tool limits plus document expansion give a hard maximum of 120 candidates; the serialized model input is additionally capped at 96,000 characters by dividing the remaining text budget across the complete batch. Candidate text is untrusted data and cannot change the output contract.
 
-### 5.7 `grade_evidence`
+The model must return exactly one `(chunk_id, relevance_score)` item for every input candidate. Local validation rejects a missing, duplicated or unknown id, non-finite score, score outside `[0, 1]`, malformed JSON or provider failure. A valid batch is ordered by descending score with original recall rank as the deterministic tie-breaker, then converted to stable `old_rank`, `rerank_score` and selection status. The workflow never mixes a partial model ranking with rule scores.
 
-Returns `enough_evidence`, reason, covered aspects, missing aspects, contradictions and an optional supplementary plan. For comparisons, evidence must cover every required side; one-side-only evidence is insufficient. Missing referenced artifacts such as a “城市级别表” trigger a targeted tool/query rather than a generic repeat.
+`RERANKER=rule_based|auto|openai` controls the configured builder. `auto` uses OpenAI only when both an API key and `OPENAI_RERANKER_MODEL` (or the shared `OPENAI_MODEL`) are configured; otherwise it executes the rule fallback with `fallback_reason=not_configured`. Explicit `openai` mode fails configuration when required values are absent. Timeout, connection, authentication, rate-limit, provider and invalid-output failures execute the deterministic rule reranker once with a bounded reason code. Direct `AgenticRAGWorkflow()` construction remains rule-based for offline reproducibility.
 
-### 5.8 `prepare_supplementary_retrieval`
+The per-query trace records the implementation that actually produced the ranking, configured model when applicable, whether fallback was active and its sanitized reason. Queries that terminate before ranking use `reranker_name=not_run`, never the configured wrapper name. It never contains provider error text, prompt text or candidate bodies. Exhaustive document expansion reserves output capacity for every bounded sibling; focused questions retain the normal output cap.
 
-If evidence is insufficient and retry budget remains, selects only the tool/query needed for missing aspects, appends it to the plan and preserves prior evidence. It never discards successful earlier hops. At the cap, the workflow abstains and reports the unresolved aspects.
+Provider fallback is sticky only inside one query execution. Once the
+configured fallback wrapper reports a registered fallback reason, later
+supplementary rounds for that query invoke its deterministic whole-batch
+fallback directly instead of retrying the same unavailable provider. A new
+query starts with a fresh primary attempt. Trace records bounded
+`primary_attempt_count`, `fallback_only_count` and the registered sticky reason;
+it never exposes the provider error.
+
+### 5.7 `evaluate_evidence`
+
+Combines grading and retry planning into one typed
+`EvidenceEvaluation(action=answer|retry|abstain, reason)`. The grader still
+records `enough_evidence`, covered/missing aspects, contradictions and
+suggested tool/query. For comparisons, evidence must cover every required side;
+one-side-only evidence is insufficient. When evidence is insufficient and
+budget remains, the same stage first proves the next plan fingerprint is
+unique, then appends only that needed item, increments the retry count and
+preserves prior evidence. At the cap or on a duplicate it returns `abstain`;
+sufficient evidence returns `answer`.
+
+The normal evidence rule requires at least two relevant chunks and complete
+tool/version coverage. One exception supports atomic feature explanations:
+exactly one relevant chunk is sufficient only when all of these hold:
+
+- `retrieval_goal=focused`, intent is not `comparison`, and exactly one
+  authorized tool is selected;
+- the question requests only one registered aspect family; two or more of
+  definition, mechanism, operation/configuration, constraints/risks and
+  trade-offs make it a multi-aspect question and disable this exception;
+- its rerank score is at least `0.80`;
+- the question contains the chunk's non-empty section name after
+  case-insensitive NFKC/whitespace normalization, establishing direct named
+  feature coverage;
+- the chunk satisfies the resolved current/exact version scope and normal
+  version isolation found no conflicting edition.
+
+This path records `evidence_basis=single_strong_chunk` and selects exactly that
+chunk, so generation and verification still require a live citation.
+Exhaustive, comparison, multi-tool and indirect/weak single-chunk questions
+never use this exception.
+
+`missing_aspects` contains only registered, actionable codes derived from the
+actual state: `no_relevant_evidence`, `single_weak_chunk`,
+`single_indirect_chunk`, `multi_aspect_requires_coverage`,
+`incomplete_multi_evidence`,
+`incomplete_exhaustive_coverage`, `tool:<name>` or
+`version:<scope>`. Generic placeholders such as `specific document terms` and
+`additional citations` are forbidden. `evidence_basis` is one of
+`single_strong_chunk`, `multi_chunk_coverage` or
+`insufficient_evidence`.
+
+`max_retry=3` is an upper bound, not a required number of attempts. A retry
+must be both bounded and capable of changing the evidence-state fingerprint.
+No-progress or duplicate-retry detection may terminate earlier, and the trace
+distinguishes `retry_exhausted`, `no_progress` and
+`duplicate_retry_query`.
+
+Conversation Memory recall gating is unchanged. A prior assistant answer,
+Memory value or non-equivalent response-cache candidate cannot become citation
+evidence. Future planners may use previously validated citation lineage only
+as a permission-checked retrieval hint; the current question must still fetch,
+rerank, select and verify live KB chunks. Therefore a self-contained follow-up
+such as “介绍下 Milvus 3.0 Force Merge” must also succeed in a fresh session.
 
 ### 5.9 `generate_answer`
 
-Delegates at most five selected chunks, resolved entity info and the validated version scope to the answer generator defined in [`13-llm-answer-generation.md`](./13-llm-answer-generation.md). The answer must distinguish supported conclusions, uncovered comparison items and missing evidence; explicit version comparisons label each conclusion with its source version.
+Delegates at most five selected chunks for focused questions, or at most sixteen bounded siblings for an exhaustive document query, plus resolved entity info and the validated version scope to the answer generator defined in [`13-llm-answer-generation.md`](./13-llm-answer-generation.md). The shared character cap still applies. The answer must distinguish supported conclusions, uncovered comparison items and missing evidence; explicit version comparisons label each conclusion with its source version.
 
 ### 5.10 `verify_answer`
 
 Runs after generation and before answer chunks become terminal output. It verifies that every structured citation belongs to selected context, every inline marker resolves, version scope obeys the current/exact/comparison policy, at least one citation supports a grounded answer, and an abstention does not claim unsupported specifics. It records a structured `answer_validation` result without chain-of-thought.
 
-For `answered_from_memory`, verification requires at least one recalled live record, no KB citations and an answer constructed only from bounded Memory summaries. For `memory_write`, verification requires a non-empty remembered statement and no citation.
+For `answered_from_memory`, verification requires at least one recalled live record, no KB citations and an answer constructed only from bounded Memory values. In chronological mode, every answer item must correspond to a recalled `short_term/user` record and preserve most-recent-first order; assistant content, summaries and selective facts are forbidden. For `memory_write`, verification requires a non-empty remembered statement and no citation.
 
 ### 5.11 `persist_turn_memory`
 
 After answer verification (or another valid direct terminal outcome), after all answer deltas are consumed and while producing `final`, write the bounded user turn, assistant turn and deterministic per-turn summary under the active `(session_id, query_id)`. Explicit remember intent adds one `task_state`. Idempotent upsert prevents retries/reruns from duplicating a turn. A typed write failure sets `write_failed`; the final snapshot drives a safe UI warning and preserves an otherwise valid answer. For explicit `memory_write`, the response remains non-committal until this final status and uses `memory_write_failed` when persistence fails.
+
+Conversation Memory, Selective Memory and grounded-response cache are three
+logical sinks, but the current implementation persists them sequentially.
+Conversation Memory failure may change the explicit-memory terminal outcome,
+and deployed sinks may share one Milvus client; no current adapter contract
+proves thread-safe writes, deterministic failure precedence and cancellation.
+Parallel sink writes remain disabled until all three capabilities are explicit
+and a result-aggregation contract replaces direct shared-state mutation.
 
 ## 6. Invariants
 
 1. The graph reaches direct answer, grounded answer, clarification request, permission denial, safe operation refusal or abstain in bounded steps.
 2. No private search occurs before an allowed `permission_decision`.
 3. `1 ≤ initial subqueries ≤ 3`, `0 ≤ retry_count ≤ max_retry == 3`.
-4. Every search call names one registered tool and uses only that tool's policy-owned filters intersected with allowed departments.
+4. A supplementary round whose evidence-state fingerprint is unchanged skips
+   rerank/grade and terminates safely; provenance changes prevent a false
+   no-progress result.
+5. Every search call names one registered tool and uses only that tool's policy-owned filters intersected with allowed departments.
 6. Comparison answers require evidence for every planned side or explicitly identify uncovered sides.
 7. Supplementary retrieval preserves earlier evidence and tool provenance.
 8. Every citation points to selected context from the current `query_id`.
@@ -246,18 +488,24 @@ After answer verification (or another valid direct terminal outcome), after all 
 15. Memory context may affect classification and query rewrite but cannot satisfy KB evidence grading, create a citation or bypass permission.
 16. validated answer deltas are streamed before persistence;
 17. only when the consumer requests the terminal envelope, `persist_turn_memory` completes or records a visible degraded status and `final` exposes that status. A cancelled/incomplete stream never writes the current turn.
+18. Query classification always returns validated fixed enums; provider/output failure activates a traced rule fallback, and classifier output cannot grant permission or construct filters. LLM-only `conversation` cannot disable retrieval without deterministic rule support.
+19. A response-cache candidate never becomes observable before current permission and evidence freshness validation; a cache hit preserves citations and skips all expensive RAG stages.
+20. Reranking consumes the complete bounded recall pool. A model result is accepted only as a complete permutation of input chunk ids with finite `[0, 1]` scores; every provider/output failure falls back for the whole batch and is labeled in trace.
+21. Recent-question recall uses a deterministic chronological user-turn listing, never KB tool selection, ANN similarity or Selective Memory decay; its current command is not self-recalled.
+22. A reranker provider failure is sticky only for later rounds of the same
+    query; it never suppresses the primary attempt of a new query.
 
 ## 7. Observability
 
 Trace shows, in order:
 
-- memory recall status/count without Memory content;
-- intent/topic classification, matched/ambiguous entities, catalog version and retrieval decision;
+- memory recall status/count/decision/mode/reason/requested-count/actual-types without Memory content;
+- intent/topic/retrieval-goal classification, classifier/model/fallback metadata, matched/ambiguous entities, catalog version and retrieval decision;
 - permission decision without credentials or identity secrets;
 - selected tools and reasons;
 - query plan, dependencies and each rewrite/retry round;
 - each tool call's safe filters, version scope, result count and latency;
-- merged recall, rerank and evidence coverage/missing aspects;
+- merged recall, actual reranker/model/fallback metadata and evidence coverage/missing aspects;
 - supplementary retrieval decisions;
 - generation implementation/fallback;
 - citation/self-check result and terminal status.

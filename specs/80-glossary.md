@@ -1,6 +1,6 @@
 # 80 — Glossary
 
-Status: draft · Last updated: 2026-07-27
+Status: draft · Last updated: 2026-07-28
 
 ## Agent Chat
 
@@ -17,6 +17,38 @@ Agent 可选择的受限能力。Search tool 封装知识域与 metadata filter 
 ## Query plan
 
 当前问题的一到三个检索子任务。每项绑定一个注册工具，可声明对前序子任务的依赖。Parallel decomposition 同时覆盖多个方面；multi-hop plan 用第一跳证据细化后续查询。
+
+## Query classifier
+
+只在固定枚举内输出 `intent`、`query_type` 与 `retrieval_goal` 的可替换组件。`LLMQueryClassifier` 负责理解自然语言变体；`RuleBasedQueryClassifier` 负责明确 action、离线复现和 fallback。它不授予权限、不选择工具、不构造 metadata filters。
+
+## Grounded response cache
+
+同一 session 内复用已经过 citation/self-check 的 KB 回答。它保存完整 citations 与 evidence version/checksum snapshot，并在当前权限和 freshness 验证后才能命中。它不同于 Conversation Memory：后者补全多轮语境，前者仍是可引用的 KB-grounded response。
+
+## Episode
+
+一次具体经历的不可变 Memory event，例如用户纠正、任务状态变化、检索失败或成功策略。Episode 记录“发生了什么”，不等于系统当前相信的事实；其召回价值可随时间 decay。
+
+## Selection Gate
+
+Episode capture 后的低成本筛选边界。它根据显式记忆、纠正、任务变化、失败严重度、新颖性、复发和未来效用，输出 retention class、salience 与 decay profile。LLM 只可处理规则得分的模糊区间。
+
+## Consolidated Memory
+
+由一组 source episodes 缓慢归纳出的 versioned durable fact。它必须保留 lineage，并以 active、superseded、disputed 或 tombstoned 表达当前有效性；它不是 Response Cache。
+
+## Working-state projection
+
+从 event lineage 和 fact revisions 重建的当前任务、偏好、决策、纠正、经验与冲突视图。Projection 可重建，不作为不可追溯的 mutable truth。
+
+## MemoryPack
+
+`recall_memory` 返回的 bounded typed context，包含 working state、durable facts、recent episodes、conflicts 与 provenance。Grounded-response cache candidate 是独立 workflow state，不属于 MemoryPack。
+
+## Soft vs logical vs physical forgetting
+
+Soft forgetting 使用 Milvus decay 降低旧 Memory 排名；logical forgetting 通过 expiry、supersession、dispute 或 tombstone 阻止使用；physical forgetting 由清理流程移除 payload/vector。Decay 不能代替后两者。
 
 ## Predefined entity
 

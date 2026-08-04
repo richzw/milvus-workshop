@@ -6,7 +6,6 @@ import hashlib
 import re
 from typing import Any
 
-from agent_workshop_demo.config import VECTOR_DIMS
 from agent_workshop_demo.embedding import tokenize
 
 
@@ -22,29 +21,34 @@ def checksum(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def minhash_signature(
-    text: str,
-    dim: int = VECTOR_DIMS["MINHASH_DIM"],
-) -> list[int]:
-    """Return an experimental binary MinHash-style signature."""
+def near_duplicate_jaccard(
+    left: str,
+    right: str,
+    *,
+    shingle_size: int = 3,
+) -> float:
+    """Estimate local near-duplicate overlap without persisting a signature."""
 
-    if dim <= 0:
-        raise ValueError("dim must be greater than zero")
-    tokens = sorted(set(tokenize(text))) or [""]
-    signature: list[int] = []
-    for index in range(dim):
-        values = [
-            int.from_bytes(
-                hashlib.blake2b(
-                    f"{index}:{token}".encode("utf-8"),
-                    digest_size=8,
-                ).digest(),
-                "big",
-            )
-            for token in tokens
-        ]
-        signature.append(min(values) & 1)
-    return signature
+    if shingle_size <= 0:
+        raise ValueError("shingle_size must be greater than zero")
+
+    def shingles(text: str) -> set[tuple[str, ...]]:
+        tokens = tokenize(text)
+        if not tokens:
+            return set()
+        if len(tokens) < shingle_size:
+            return {tuple(tokens)}
+        return {
+            tuple(tokens[index : index + shingle_size])
+            for index in range(len(tokens) - shingle_size + 1)
+        }
+
+    left_shingles = shingles(left)
+    right_shingles = shingles(right)
+    if not left_shingles and not right_shingles:
+        return 1.0
+    union = left_shingles | right_shingles
+    return len(left_shingles & right_shingles) / len(union)
 
 
 def build_dedup_record(
@@ -74,12 +78,10 @@ def build_dedup_record(
         "record_level": record_level,
         "normalized_text": normalized,
         "checksum": checksum(normalized),
-        "minhash_signature": minhash_signature(normalized),
         "created_at": created_at,
         "metadata": {
-            "shingle_size": 1,
-            "num_perm": VECTOR_DIMS["MINHASH_DIM"],
-            "parser_version": "local-demo-v1",
-            "experimental": True,
+            "shingle_size": 3,
+            "num_hashes": 256,
+            "parser_version": "milvus-3-dido-v1",
         },
     }

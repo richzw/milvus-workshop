@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Optional real image embedding runtime. DINOv3 model weights are gated and
+# require accepting Meta's DINOv3 license before download.
+torch>=2.7,<3
+transformers>=4.56,<6
+pillow>=10,<13
