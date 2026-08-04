@@ -1,6 +1,6 @@
 # 90 — Roadmap: Incremental Workshop Delivery
 
-Status: draft v3 · Audience: stakeholders and workshop author · Last updated: 2026-07-27
+Status: draft v5 · Audience: stakeholders and workshop author · Last updated: 2026-07-30
 
 ## 0. Principles
 
@@ -25,6 +25,14 @@ Status: draft v3 · Audience: stakeholders and workshop author · Last updated: 
            ▼
 ┌─────────────────────┐
 │ M3 Explore Milvus   │  verified feature panels + optional experiments
+└──────────┬──────────┘
+           ▼
+┌─────────────────────┐
+│ M4 Memory that Learns│ select → decay → consolidate → project
+└──────────┬──────────┘
+           ▼
+┌─────────────────────┐
+│ M5 Predictable Flow │ short-circuit → converge → bounded latency
 └─────────────────────┘
 ```
 
@@ -48,6 +56,8 @@ Status: draft v3 · Audience: stakeholders and workshop author · Last updated: 
 ### M1 — Explainable Agentic RAG
 
 **User-visible unlock**: 参与者只需自然语言提问；Agent 自动判断意图、用预定义实体理解领域术语、检查权限、选择最相关工具、拆解复杂问题，并在正确的文档版本范围内按证据缺口补充检索。参与者能看到完整 terminology resolution、version scope、tool plan、recall/rerank、grade、retry 和 answer self-check。
+
+同一 session 内再次提出完全相同或高置信语义等价的 KB 问题时，Agent 在当前权限与 evidence freshness 校验后直接复用带 citations 的 grounded response；Trace 明确区分 exact/semantic hit 与 stale/miss。
 
 **Specs touched**: 10, 12, 13, 20, 70.
 
@@ -92,8 +102,53 @@ Status: draft v3 · Audience: stakeholders and workshop author · Last updated: 
 - 至少 3 个图片样例展示 schema nullability；若启用图片检索，另有独立 eval。
 - conversation memory 按 [`10b-conversation-memory.md`](./10b-conversation-memory.md) 独立验收并显式进入 P2 query path；MinHash dedup、MFS 仍是独立实验。
 - 同 session follow-up 可观察召回和写入，跨 session/过期记录不可见，用户可清除当前 session。
+- “查找下我最近的三个问题是什么”直接返回最近三个 prior user turns，顺序、数量和 trace 可解释，且不调用内部知识搜索工具。
 
 **Provisional calendar**: 核心 feature lab 约 2–4 days；每个 P2 experiment 另估。
+
+### M4 — Selective Memory that learns and forgets
+
+**User-visible unlock**: 参与者可以观察 Memory 为什么被保留、如何随时间软衰减、何时 consolidation 为长期事实，以及纠正如何 supersede 旧事实并保留 lineage。普通对话不再与重要纠正和任务状态获得相同的长期权重。
+
+**Specs touched**: 10, 10b, 10c, 10d, 12, 20, 70.
+
+**Exit criteria**:
+
+- UI/Trace 可安全显示 selection reason counts、retention class、decay profile、事实/episode/conflict 计数，不展示内容、embedding 或 selector prompt。
+- `memory_events` 与 `memory_facts` 完成 same-session local/Milvus contract；response cache 保持独立。
+- 规则 selector、typed recall lanes、working-state projection、correction/supersession 与 bounded consolidation 通过 deterministic fixtures。
+- Milvus Decay Ranker 已由 Phase 0 证明；若未通过，使用明确标注的 deterministic application-side decay fallback。
+- expired、superseded、tombstoned、权限不兼容和跨 session records 的可见率为 0。
+- recall 不刷新生命周期；explicit reconfirmation 追加 event 并可更新 projected revision。
+- legacy `conversation_memory` dual-write/cutover 有 parity test 与可回退步骤。
+
+**Provisional calendar**: Phase 0 capability proof 后约 5–8 focused developer days；cross-session identity、fork/merge 与自动 skill/prompt promotion 不包含在内。
+
+### M5 — Predictable and convergent Agent flow
+
+**User-visible unlock**: direct/Memory 请求走最短安全路径；没有新证据的
+补充检索提前结束；一次 provider 故障不会在同一 query 的每轮重试中重复
+消耗 timeout。Trace 仍保留权限、retrieval、rerank、grade、verification
+和 persistence 的独立安全边界。
+
+**Specs touched**: 10c, 12, 12a, 20, 70, 99.
+
+**Exit criteria**:
+
+- evidence-state fingerprint 无变化时提前 abstain 且不再次 rerank；
+- reranker primary 在一个 query 中最多因 fallback 尝试一次，新 query
+  不继承该降级；
+- direct/Memory flow 不调用 grounded-response cache；
+- local 与 LangGraph 由同一 transition contract 驱动并保持 terminal/event
+  parity；
+- 仅当 adapter 显式证明并发能力时启用 bounded parallelism，默认行为仍
+  可重复、可取消并保持权限/session 隔离。
+- focused named feature 在一条强、直接、版本匹配的 live citation 下可回答，
+  comparison/exhaustive/multi-tool 与弱单证据仍拒答；
+- supplementary retrieval 保留原问题产品/功能/版本术语，并在工具调用前
+  拒绝重复 retry-plan fingerprint。
+
+**Provisional calendar**: M4 后约 3–5 focused developer days。
 
 ## 3. Calendar shape and calibration
 

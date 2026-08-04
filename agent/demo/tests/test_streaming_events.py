@@ -183,14 +183,14 @@ class StreamingEventTests(unittest.TestCase):
 
     def test_ui_error_does_not_render_raw_dependency_message(self) -> None:
         error = WorkflowStageError(
-            "milvus_hybrid_retrieve",
+            "execute_tool_plan",
             "query_safe_error",
             RuntimeError("token=secret-value"),
         )
 
         rendered = safe_query_error(error)
 
-        self.assertIn("milvus_hybrid_retrieve", rendered)
+        self.assertIn("execute_tool_plan", rendered)
         self.assertIn("query_safe_error", rendered)
         self.assertNotIn("secret-value", rendered)
 
@@ -319,10 +319,10 @@ class StreamingEventTests(unittest.TestCase):
                 state = payload["state"]
                 workflow._measure_stage(
                     state,
-                    "classify_query",
-                    lambda: workflow.classify_query(state),
+                    "classify_and_route",
+                    lambda: workflow.classify_and_route(state),
                 )
-                yield {"classify_query": payload}
+                yield {"classify_and_route": payload}
 
         adapter = LangGraphAgenticRAGWorkflow.__new__(
             LangGraphAgenticRAGWorkflow

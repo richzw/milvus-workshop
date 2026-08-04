@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from typing import Any
 
+from agent_workshop_demo.config import VECTOR_DIMS
 from agent_workshop_demo.embedding import (
     dense_vector,
     embedding_metadata,
-    image_vector,
     sparse_vector,
+)
+from agent_workshop_demo.image_embedding import (
+    DeterministicImageEmbeddingProvider,
+    image_embedding_metadata,
 )
 from agent_workshop_demo.models import KBChunk
 
 MAY_2026 = 1782604800000
+SAMPLE_IMAGE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "sample_data/local_docs/images/s3_sync_flow.png"
+)
+SAMPLE_IMAGE_PROVIDER = DeterministicImageEmbeddingProvider()
 
 
 def checksum(text: str) -> str:
@@ -48,6 +58,17 @@ def chunk(
 ) -> KBChunk:
     """Build one validated sample chunk."""
 
+    embedded_metadata = embedding_metadata(metadata)
+    embedded_image: list[float] | None = None
+    if has_image_vector:
+        embedded_metadata = image_embedding_metadata(
+            embedded_metadata,
+            provider=SAMPLE_IMAGE_PROVIDER,
+        )
+        embedded_image = SAMPLE_IMAGE_PROVIDER.embed(
+            SAMPLE_IMAGE_PATH,
+            dimensions=VECTOR_DIMS["IMAGE_DIM"],
+        )
     return KBChunk(
         doc_id=doc_id,
         chunk_id=chunk_id,
@@ -72,11 +93,11 @@ def chunk(
         doc_version=doc_version,
         is_current=is_current,
         checksum=checksum(text),
-        metadata=embedding_metadata(metadata),
+        metadata=embedded_metadata,
         has_image_vector=has_image_vector,
         text_vector=dense_vector(text),
         sparse_vector=sparse_vector(text),
-        image_vector=image_vector(text) if has_image_vector else None,
+        image_vector=embedded_image,
     )
 
 
@@ -187,10 +208,34 @@ def load_kb_chunks() -> list[KBChunk]:
             chunk_index=1,
             department="engineering",
             priority=9,
+            doc_version="v3.0",
             text=(
                 "Milvus 在 RAG 架构里负责向量与混合检索层。kb_chunks stores "
                 "text_vector, sparse_vector, nullable image_vector, source "
                 "metadata, updated_at, priority, and aggregation fields."
+            ),
+            metadata={"parser": "markdown"},
+        ),
+        chunk(
+            doc_id="doc_milvus_feature_map",
+            chunk_id="doc_milvus_feature_map_c002",
+            record_type="text_chunk",
+            source_type="local",
+            source_uri=(
+                "sample_data/local_docs/engineering/"
+                "milvus_feature_map.md"
+            ),
+            doc_type="markdown",
+            title="Milvus 3.0 Feature Map",
+            section="Force Merge",
+            chunk_index=2,
+            department="engineering",
+            priority=9,
+            doc_version="v3.0",
+            text=(
+                "Milvus 3.0 Force Merge lets operators explicitly consolidate "
+                "eligible segments. It controls storage layout and query "
+                "efficiency rather than adding an application retrieval API."
             ),
             metadata={"parser": "markdown"},
         ),

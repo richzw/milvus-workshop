@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-from collections import Counter
+import re
 from collections.abc import Iterable
 from importlib import import_module
 from typing import Any
@@ -12,41 +11,83 @@ from typing import Any
 from agent_workshop_demo.embedding import (
     EMBEDDING_FINGERPRINT_KEY,
     dense_vector,
-    sparse_vector,
     text_embedding_fingerprint,
 )
-from agent_workshop_demo.models import KBChunk, SearchResult
+from agent_workshop_demo.image_embedding import (
+    IMAGE_EMBEDDING_FINGERPRINT_KEY,
+    image_embedding_fingerprint,
+)
+from agent_workshop_demo.image_retrieval import (
+    image_only_filters,
+    require_image_space,
+    validate_image_fingerprint,
+    validate_image_search_top_k,
+    validate_image_query_vector,
+)
+from agent_workshop_demo.models import (
+    ImageSearchResult,
+    KBChunk,
+    SearchResult,
+)
+from agent_workshop_demo.retrieval import (
+    OrderMode,
+    order_search_results,
+    parse_order_by,
+    validate_aggregation_fields,
+)
 from agent_workshop_demo.schema.collections import (
     CONVERSATION_MEMORY_COLLECTION,
     CONVERSATION_MEMORY_INDEXES,
     DOC_DEDUP_SIGNATURES_COLLECTION,
     DOC_DEDUP_SIGNATURES_INDEXES,
+    GROUNDED_RESPONSE_CACHE_COLLECTION,
+    GROUNDED_RESPONSE_CACHE_INDEXES,
     KB_CHUNKS_COLLECTION,
     KB_CHUNKS_INDEXES,
+    MEMORY_EVENTS_COLLECTION,
+    MEMORY_EVENTS_INDEXES,
+    MEMORY_FACTS_COLLECTION,
+    MEMORY_FACTS_INDEXES,
+    MEMORY_CONSOLIDATION_JOURNAL_COLLECTION,
+    MEMORY_CONSOLIDATION_JOURNAL_INDEXES,
 )
 from agent_workshop_demo.validation import normalize_filters, validate_question
 
 COLLECTION_DEFINITIONS = [
     KB_CHUNKS_COLLECTION,
     CONVERSATION_MEMORY_COLLECTION,
+    MEMORY_EVENTS_COLLECTION,
+    MEMORY_FACTS_COLLECTION,
+    MEMORY_CONSOLIDATION_JOURNAL_COLLECTION,
+    GROUNDED_RESPONSE_CACHE_COLLECTION,
     DOC_DEDUP_SIGNATURES_COLLECTION,
 ]
 
 INDEX_DEFINITIONS = {
     str(KB_CHUNKS_COLLECTION["collection_name"]): KB_CHUNKS_INDEXES,
-    str(CONVERSATION_MEMORY_COLLECTION["collection_name"]):
-        CONVERSATION_MEMORY_INDEXES,
-    str(DOC_DEDUP_SIGNATURES_COLLECTION["collection_name"]):
-        DOC_DEDUP_SIGNATURES_INDEXES,
+    str(CONVERSATION_MEMORY_COLLECTION["collection_name"]): CONVERSATION_MEMORY_INDEXES,
+    str(MEMORY_EVENTS_COLLECTION["collection_name"]): MEMORY_EVENTS_INDEXES,
+    str(MEMORY_FACTS_COLLECTION["collection_name"]): MEMORY_FACTS_INDEXES,
+    str(
+        MEMORY_CONSOLIDATION_JOURNAL_COLLECTION["collection_name"]
+    ): MEMORY_CONSOLIDATION_JOURNAL_INDEXES,
+    str(
+        GROUNDED_RESPONSE_CACHE_COLLECTION["collection_name"]
+    ): GROUNDED_RESPONSE_CACHE_INDEXES,
+    str(
+        DOC_DEDUP_SIGNATURES_COLLECTION["collection_name"]
+    ): DOC_DEDUP_SIGNATURES_INDEXES,
 }
 DEMO_COLLECTION_NAMES = tuple(
-    str(definition["collection_name"])
-    for definition in COLLECTION_DEFINITIONS
+    str(definition["collection_name"]) for definition in COLLECTION_DEFINITIONS
 )
+_FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class MilvusHybridRetriever:
     """Milvus-backed insertion and retrieval adapter for kb chunks."""
+
+    supports_parallel_search = False
 
     def __init__(
         self,
@@ -54,12 +95,16 @@ class MilvusHybridRetriever:
         *,
         collection_name: str = "kb_chunks",
         batch_size: int = 100,
+        sparse_field: str = "sparse_vector",
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than zero")
+        if not _FIELD_NAME.fullmatch(sparse_field):
+            raise ValueError("sparse_field must be a valid Milvus field name")
         self.client = client
         self.collection_name = collection_name
         self.batch_size = batch_size
+        self.sparse_field = sparse_field
 
     @classmethod
     def connect(
@@ -74,8 +119,7 @@ class MilvusHybridRetriever:
             milvus_module = import_module("pymilvus")
         except ImportError as exc:
             raise RuntimeError(
-                "Install pymilvus with `pip install -r "
-                "demo/requirements.txt`."
+                "Install pymilvus with `pip install -r demo/requirements.txt`."
             ) from exc
         return cls(
             milvus_module.MilvusClient(uri=uri, token=token),
@@ -86,14 +130,13 @@ class MilvusHybridRetriever:
         """Replace matching chunk IDs and insert records in bounded batches."""
 
         records = [self._record_for_insert(chunk) for chunk in chunks]
-        if not self.client.has_collection(
-            collection_name=self.collection_name
-        ):
+        if not self.client.has_collection(collection_name=self.collection_name):
             raise RuntimeError(
                 f"Milvus collection {self.collection_name!r} does not exist; "
                 "run demo/scripts/create_collections.py first."
             )
         self.client.load_collection(collection_name=self.collection_name)
+        self._reject_image_space_conflict(records)
         self._reject_current_family_conflicts(records)
         batch_count = 0
         for start in range(0, len(records), self.batch_size):
@@ -117,6 +160,42 @@ class MilvusHybridRetriever:
         if records:
             self.client.flush(collection_name=self.collection_name)
         return {"insert_count": len(records), "batch_count": batch_count}
+
+    def _reject_image_space_conflict(
+        self,
+        records: list[dict[str, Any]],
+    ) -> None:
+        incoming_fingerprints = {
+            str(record["metadata"][IMAGE_EMBEDDING_FINGERPRINT_KEY])
+            for record in records
+            if record["has_image_vector"]
+        }
+        if not incoming_fingerprints:
+            return
+        if len(incoming_fingerprints) != 1:
+            raise ValueError(
+                "Incoming image records must share one embedding fingerprint"
+            )
+        incoming = next(iter(incoming_fingerprints))
+        existing = self.client.query(
+            collection_name=self.collection_name,
+            filter="has_image_vector == true",
+            output_fields=["metadata"],
+            limit=1,
+        )
+        if not existing:
+            return
+        raw_metadata = existing[0].get("metadata")
+        stored = (
+            raw_metadata.get(IMAGE_EMBEDDING_FINGERPRINT_KEY)
+            if isinstance(raw_metadata, dict)
+            else None
+        )
+        if not isinstance(stored, str) or stored != incoming:
+            raise RuntimeError(
+                "Incremental image embedding-space replacement is unsafe; "
+                "recreate and fully re-ingest kb_chunks before publishing."
+            )
 
     def _reject_current_family_conflicts(
         self,
@@ -166,9 +245,7 @@ class MilvusHybridRetriever:
     def ensure_collection_ready(self) -> None:
         """Fail fast unless the configured collection exists and can be loaded."""
 
-        if not self.client.has_collection(
-            collection_name=self.collection_name
-        ):
+        if not self.client.has_collection(collection_name=self.collection_name):
             raise RuntimeError(
                 f"Milvus collection {self.collection_name!r} does not exist; "
                 "run demo/scripts/create_collections.py and "
@@ -213,6 +290,7 @@ class MilvusHybridRetriever:
         top_k: int,
         filters: dict[str, Any] | None = None,
         order_by: list[str] | None = None,
+        order_mode: OrderMode = "relevance",
     ) -> list[SearchResult]:
         """Run dense and sparse recall, then fuse into workflow results."""
 
@@ -220,19 +298,21 @@ class MilvusHybridRetriever:
         if top_k <= 0:
             raise ValueError("top_k must be greater than zero")
         expression = _filter_expression(normalize_filters(filters))
-        output_fields = [
-            field["name"]
-            for field in KB_CHUNKS_COLLECTION["fields"]
-            if field["name"] != "id"
-            and field["type"]
-            not in {"FloatVector", "SparseFloatVector", "BinaryVector"}
-        ]
+        parsed_order = parse_order_by(order_by or [])
+        if order_mode not in {"relevance", "scalar"}:
+            raise ValueError(f"Unsupported order_mode: {order_mode!r}")
+        output_fields = _chunk_output_fields()
         common = {
             "collection_name": self.collection_name,
             "filter": expression,
             "limit": top_k,
             "output_fields": output_fields,
         }
+        if order_mode == "scalar" and parsed_order:
+            common["order_by_fields"] = [
+                {"field": field, "order": direction}
+                for field, direction in parsed_order
+            ]
         dense_hits = self.client.search(
             **common,
             data=[dense_vector(normalized_query)],
@@ -241,38 +321,192 @@ class MilvusHybridRetriever:
         )
         sparse_hits = self.client.search(
             **common,
-            data=[_milvus_sparse_vector(sparse_vector(normalized_query))],
-            anns_field="sparse_vector",
-            search_params={"metric_type": "IP", "params": {}},
+            data=[normalized_query],
+            anns_field=self.sparse_field,
+            search_params={"metric_type": "BM25", "params": {}},
         )
         results = _fuse_hits(
             _first_query_hits(dense_hits),
             _first_query_hits(sparse_hits),
             top_k=top_k,
             order_by=order_by or [],
+            order_mode=order_mode,
         )
         for result in results:
             _require_matching_embedding_fingerprint(result.chunk)
         return results
 
-    @staticmethod
+    def search_image_vector(
+        self,
+        query_vector: list[float],
+        *,
+        image_fingerprint: str,
+        top_k: int,
+        filters: dict[str, Any] | None = None,
+    ) -> list[ImageSearchResult]:
+        """Search nullable image vectors with an enforced image-only filter."""
+
+        validate_image_search_top_k(top_k)
+        validated_query = validate_image_query_vector(query_vector)
+        validated_fingerprint = validate_image_fingerprint(
+            image_fingerprint
+        )
+        configured_fingerprint = image_embedding_fingerprint()
+        if validated_fingerprint != configured_fingerprint:
+            raise ValueError(
+                "Image query fingerprint does not match the configured "
+                "collection vector space"
+            )
+        expression = _filter_expression(image_only_filters(filters))
+        raw_hits = self.client.search(
+            collection_name=self.collection_name,
+            data=[validated_query],
+            anns_field="image_vector",
+            search_params={
+                "metric_type": "COSINE",
+                "params": {"ef": 64},
+            },
+            filter=expression,
+            limit=top_k,
+            output_fields=_chunk_output_fields(),
+        )
+        results: list[ImageSearchResult] = []
+        for rank, hit in enumerate(
+            _first_query_hits(raw_hits)[:top_k],
+            start=1,
+        ):
+            chunk = _chunk_from_entity(_hit_entity(hit))
+            require_image_space(
+                chunk,
+                expected_fingerprint=validated_fingerprint,
+            )
+            _require_matching_embedding_fingerprint(chunk)
+            results.append(
+                ImageSearchResult(
+                    chunk=chunk,
+                    rank=rank,
+                    image_score=_hit_score(hit),
+                )
+            )
+        return results
+
     def aggregations(
+        self,
         results: list[SearchResult],
         fields: list[str],
     ) -> dict[str, dict[str, int]]:
-        """Count public scalar fields over the recalled result set."""
+        """Aggregate public facets server-side over the retained candidates."""
 
-        return {
-            field_name: dict(
-                sorted(
-                    Counter(
-                        str(getattr(item.chunk, field_name))
-                        for item in results
-                    ).items()
-                )
-            )
-            for field_name in fields
+        requested = validate_aggregation_fields(fields)
+        chunk_ids = list(dict.fromkeys(item.chunk.chunk_id for item in results))
+        if len(chunk_ids) > 64:
+            raise ValueError("Aggregation candidate set exceeds 64 chunks")
+        output: dict[str, dict[str, int]] = {
+            field: {} for field in requested
         }
+        if not requested or not chunk_ids:
+            return output
+        rows = self.client.query(
+            collection_name=self.collection_name,
+            filter="chunk_id in " + json.dumps(chunk_ids, ensure_ascii=False),
+            group_by_fields=requested,
+            output_fields=[*requested, "count(*)"],
+            limit=64,
+        )
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("Milvus aggregation returned an invalid row")
+            raw_count = row.get("count(*)", row.get("count_all"))
+            if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count <= 0:
+                raise ValueError("Milvus aggregation returned an invalid count")
+            for field in requested:
+                if field not in row:
+                    raise ValueError("Milvus aggregation row is missing a field")
+                key = str(row[field])
+                output[field][key] = output[field].get(key, 0) + raw_count
+        if any(sum(counts.values()) != len(chunk_ids) for counts in output.values()):
+            raise ValueError("Milvus aggregation counts do not match candidate scope")
+        return {field: dict(sorted(counts.items())) for field, counts in output.items()}
+
+    def fetch_document_chunks(
+        self,
+        *,
+        doc_id: str,
+        doc_version: str,
+        filters: dict[str, Any] | None = None,
+        limit: int,
+    ) -> list[KBChunk]:
+        """Fetch authorized sibling chunks through an exact scalar query."""
+
+        normalized_doc_id = doc_id.strip()
+        normalized_doc_version = doc_version.strip()
+        if not normalized_doc_id or not normalized_doc_version:
+            raise ValueError("doc_id and doc_version must be non-empty")
+        if limit <= 0:
+            raise ValueError("limit must be greater than zero")
+        base_expression = _filter_expression(normalize_filters(filters))
+        family_expression = (
+            f"doc_id == {json.dumps(normalized_doc_id, ensure_ascii=False)} "
+            "and doc_version == "
+            f"{json.dumps(normalized_doc_version, ensure_ascii=False)}"
+        )
+        expression = (
+            f"{base_expression} and {family_expression}"
+            if base_expression
+            else family_expression
+        )
+        output_fields = _chunk_output_fields()
+        rows = self.client.query(
+            collection_name=self.collection_name,
+            filter=expression,
+            output_fields=output_fields,
+            limit=limit,
+        )
+        chunks = [_chunk_from_entity(row) for row in rows]
+        for chunk in chunks:
+            _require_matching_embedding_fingerprint(chunk)
+        return sorted(
+            chunks,
+            key=lambda chunk: (
+                chunk.chunk_index,
+                chunk.page_no or 0,
+                chunk.chunk_id,
+            ),
+        )[:limit]
+
+    def fetch_chunks_by_ids(
+        self,
+        *,
+        chunk_ids: list[str],
+        filters: dict[str, Any] | None = None,
+    ) -> list[KBChunk]:
+        """Fetch bounded authorized chunks for cache freshness validation."""
+
+        expected = list(dict.fromkeys(chunk_ids))
+        if not 1 <= len(expected) <= 16 or any(not item.strip() for item in expected):
+            raise ValueError("chunk_ids must contain 1..16 non-empty ids")
+        base_expression = _filter_expression(normalize_filters(filters))
+        ids_expression = "chunk_id in " + json.dumps(expected, ensure_ascii=False)
+        expression = (
+            f"{base_expression} and {ids_expression}"
+            if base_expression
+            else ids_expression
+        )
+        output_fields = _chunk_output_fields()
+        try:
+            rows = self.client.query(
+                collection_name=self.collection_name,
+                filter=expression,
+                output_fields=output_fields,
+                limit=len(expected),
+            )
+            chunks = [_chunk_from_entity(row) for row in rows]
+            for chunk in chunks:
+                _require_matching_embedding_fingerprint(chunk)
+        except Exception as exc:
+            raise RuntimeError("Unable to validate cached KB evidence") from exc
+        by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        return [by_id[item] for item in expected if item in by_id]
 
     @staticmethod
     def _record_for_insert(chunk: KBChunk) -> dict[str, Any]:
@@ -288,10 +522,75 @@ class MilvusHybridRetriever:
             for key, value in record.items()
             if value is not None or key not in nullable_fields
         }
-        record["sparse_vector"] = _milvus_sparse_vector(
-            chunk.sparse_vector
-        )
+        record["retrieval_text"] = _chunk_retrieval_text(chunk)
+        record.pop("sparse_vector", None)
         return record
+
+
+class MilvusDedupStore:
+    """Persist raw dedup inputs and let Milvus 3.0 compute MinHash DIDO."""
+
+    def __init__(
+        self,
+        client: Any,
+        *,
+        collection_name: str = "doc_dedup_signatures",
+        batch_size: int = 100,
+    ) -> None:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero")
+        self.client = client
+        self.collection_name = collection_name
+        self.batch_size = batch_size
+
+    def insert(self, records: Iterable[dict[str, Any]]) -> dict[str, int]:
+        """Replace chunk-level raw inputs without writing Function output."""
+
+        pending = [self._validated_record(record) for record in records]
+        if not self.client.has_collection(collection_name=self.collection_name):
+            raise RuntimeError(
+                f"Milvus collection {self.collection_name!r} does not exist"
+            )
+        self.client.load_collection(collection_name=self.collection_name)
+        batches = 0
+        for start in range(0, len(pending), self.batch_size):
+            batch = pending[start : start + self.batch_size]
+            chunk_ids = [item["chunk_id"] for item in batch if item.get("chunk_id")]
+            if chunk_ids:
+                self.client.delete(
+                    collection_name=self.collection_name,
+                    filter="chunk_id in " + json.dumps(chunk_ids, ensure_ascii=False),
+                )
+            result = self.client.insert(
+                collection_name=self.collection_name,
+                data=batch,
+            )
+            inserted = _mutation_count(result, "insert_count")
+            if inserted is not None and inserted != len(batch):
+                raise RuntimeError("Milvus reported an incomplete dedup insert")
+            batches += 1
+        if pending:
+            self.client.flush(collection_name=self.collection_name)
+        return {"dedup_insert_count": len(pending), "dedup_batch_count": batches}
+
+    @staticmethod
+    def _validated_record(record: dict[str, Any]) -> dict[str, Any]:
+        expected = {
+            "doc_id",
+            "chunk_id",
+            "source_uri",
+            "source_type",
+            "record_level",
+            "normalized_text",
+            "checksum",
+            "created_at",
+            "metadata",
+        }
+        if set(record) != expected or "minhash_signature" in record:
+            raise ValueError("Invalid server-side MinHash input record")
+        if record["record_level"] == "chunk" and not record["chunk_id"]:
+            raise ValueError("Chunk-level dedup input requires chunk_id")
+        return dict(record)
 
 
 def _require_matching_embedding_fingerprint(chunk: KBChunk) -> None:
@@ -302,22 +601,40 @@ def _require_matching_embedding_fingerprint(chunk: KBChunk) -> None:
             "Chunk embedding fingerprint does not match the configured "
             f"vector space: expected {expected!r}, got {actual!r}"
         )
+    if chunk.has_image_vector:
+        expected_image = image_embedding_fingerprint()
+        actual_image = (chunk.metadata or {}).get(
+            IMAGE_EMBEDDING_FINGERPRINT_KEY
+        )
+        if actual_image != expected_image:
+            raise ValueError(
+                "Chunk image embedding fingerprint does not match the "
+                "configured vector space: expected "
+                f"{expected_image!r}, got {actual_image!r}"
+            )
 
 
-def _milvus_sparse_vector(
-    values: dict[str, float] | dict[int, float],
-) -> dict[int, float]:
-    """Convert token weights to stable uint32 Milvus sparse dimensions."""
+def _chunk_retrieval_text(chunk: KBChunk) -> str:
+    """Rebuild the versioned BM25 input without changing citation text."""
 
-    converted: dict[int, float] = {}
-    for token, weight in values.items():
-        if isinstance(token, int):
-            index = token
-        else:
-            digest = hashlib.sha256(token.encode("utf-8")).digest()
-            index = int.from_bytes(digest[:4], "big")
-        converted[index] = converted.get(index, 0.0) + float(weight)
-    return converted
+    metadata = chunk.metadata or {}
+    raw_path = metadata.get("heading_path", [])
+    heading_path = (
+        tuple(str(item) for item in raw_path)
+        if isinstance(raw_path, list)
+        else ()
+    )
+    parts: list[str] = []
+    for value in (
+        chunk.title,
+        " > ".join(heading_path),
+        chunk.section or "",
+        chunk.text,
+    ):
+        normalized = value.strip()
+        if normalized and normalized not in parts:
+            parts.append(normalized)
+    return "\n".join(parts)
 
 
 def _filter_expression(filters: dict[str, Any]) -> str:
@@ -326,15 +643,11 @@ def _filter_expression(filters: dict[str, Any]) -> str:
         if isinstance(value, list):
             if not value:
                 continue
-            clauses.append(
-                f"{field_name} in {json.dumps(value, ensure_ascii=False)}"
-            )
+            clauses.append(f"{field_name} in {json.dumps(value, ensure_ascii=False)}")
         elif isinstance(value, bool):
             clauses.append(f"{field_name} == {str(value).lower()}")
         else:
-            clauses.append(
-                f"{field_name} == {json.dumps(value, ensure_ascii=False)}"
-            )
+            clauses.append(f"{field_name} == {json.dumps(value, ensure_ascii=False)}")
     return " and ".join(clauses)
 
 
@@ -351,6 +664,7 @@ def _fuse_hits(
     *,
     top_k: int,
     order_by: list[str],
+    order_mode: OrderMode = "relevance",
 ) -> list[SearchResult]:
     entities: dict[str, dict[str, Any]] = {}
     dense_by_id: dict[str, tuple[int, float]] = {}
@@ -394,7 +708,11 @@ def _fuse_hits(
                 hybrid_score=hybrid_score,
             )
         )
-    ordered = _order_results(recalled, order_by)[:top_k]
+    ordered = order_search_results(
+        recalled,
+        order_by,
+        order_mode=order_mode,
+    )[:top_k]
     return [
         SearchResult(
             chunk=item.chunk,
@@ -414,6 +732,21 @@ def _hit_entity(hit: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(entity, dict) or "chunk_id" not in entity:
         raise ValueError("Milvus search hit is missing entity.chunk_id")
     return entity
+
+
+def _chunk_output_fields() -> list[str]:
+    """Project stored image vectors because KBChunk validates image records."""
+
+    vector_types = {"FloatVector", "SparseFloatVector", "BinaryVector"}
+    return [
+        field["name"]
+        for field in KB_CHUNKS_COLLECTION["fields"]
+        if field["name"] != "id"
+        and (
+            field["name"] == "image_vector"
+            or field["type"] not in vector_types
+        )
+    ]
 
 
 def _hit_score(hit: dict[str, Any]) -> float:
@@ -465,7 +798,7 @@ def _chunk_from_entity(entity: dict[str, Any]) -> KBChunk:
             if isinstance(raw_text_vector, list)
             else []
         ),
-        sparse_vector=sparse_vector(text),
+        sparse_vector={},
         image_vector=image_vector,
     )
 
@@ -476,35 +809,6 @@ def _optional_str(value: Any) -> str | None:
 
 def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
-
-
-def _order_results(
-    results: list[SearchResult],
-    order_by: list[str],
-) -> list[SearchResult]:
-    supported_fields = {"updated_at", "priority"}
-    parsed: list[tuple[str, str]] = []
-    for clause in order_by:
-        parts = clause.split()
-        field_name = parts[0] if parts else ""
-        direction = parts[1].lower() if len(parts) > 1 else "asc"
-        if (
-            field_name not in supported_fields
-            or direction not in {"asc", "desc"}
-            or len(parts) > 2
-        ):
-            raise ValueError(f"Unsupported order_by clause: {clause!r}")
-        parsed.append((field_name, direction))
-
-    def sort_key(item: SearchResult) -> tuple[float, ...]:
-        tie_breakers = [
-            float(getattr(item.chunk, field_name))
-            * (1 if direction == "asc" else -1)
-            for field_name, direction in parsed
-        ]
-        return (-item.hybrid_score, *tie_breakers)
-
-    return sorted(results, key=sort_key)
 
 
 def build_collection_schema(definition: dict[str, Any]) -> Any:
@@ -523,9 +827,11 @@ def build_collection_schema(definition: dict[str, Any]) -> Any:
         "VarChar": milvus_module.DataType.VARCHAR,
         "JSON": milvus_module.DataType.JSON,
         "Bool": milvus_module.DataType.BOOL,
+        "Float": milvus_module.DataType.FLOAT,
         "FloatVector": milvus_module.DataType.FLOAT_VECTOR,
         "SparseFloatVector": milvus_module.DataType.SPARSE_FLOAT_VECTOR,
         "BinaryVector": milvus_module.DataType.BINARY_VECTOR,
+        "TIMESTAMPTZ": milvus_module.DataType.TIMESTAMPTZ,
     }
     fields = []
     for field in definition["fields"]:
@@ -541,9 +847,28 @@ def build_collection_schema(definition: dict[str, Any]) -> Any:
             kwargs["max_length"] = field["max_length"]
         if "dim" in field:
             kwargs["dim"] = field["dim"]
+        if "enable_analyzer" in field:
+            kwargs["enable_analyzer"] = field["enable_analyzer"]
+        if "analyzer_params" in field:
+            kwargs["analyzer_params"] = field["analyzer_params"]
         fields.append(milvus_module.FieldSchema(**kwargs))
+    function_types = {
+        "BM25": milvus_module.FunctionType.BM25,
+        "MINHASH": milvus_module.FunctionType.MINHASH,
+    }
+    functions = [
+        milvus_module.Function(
+            name=function["name"],
+            function_type=function_types[function["type"]],
+            input_field_names=function["input_fields"],
+            output_field_names=function["output_fields"],
+            params=function.get("params", {}),
+        )
+        for function in definition.get("functions", [])
+    ]
     return milvus_module.CollectionSchema(
         fields=fields,
+        functions=functions,
         description=definition["description"],
         enable_dynamic_field=False,
     )
@@ -571,6 +896,11 @@ def create_collections(
         milvus_client.create_collection(
             collection_name=name,
             schema=build_collection_schema(definition),
+            **(
+                {"properties": definition["properties"]}
+                if "properties" in definition
+                else {}
+            ),
         )
         created.append(name)
     verified = [
@@ -581,8 +911,7 @@ def create_collections(
         )
     ]
     expected = {
-        str(definition["collection_name"])
-        for definition in COLLECTION_DEFINITIONS
+        str(definition["collection_name"]) for definition in COLLECTION_DEFINITIONS
     }
     missing = sorted(expected - set(verified))
     if missing:
@@ -613,9 +942,7 @@ def drop_demo_collections(
             continue
         milvus_client.drop_collection(collection_name=name)
         if milvus_client.has_collection(collection_name=name):
-            raise RuntimeError(
-                f"Milvus collection {name!r} still exists after drop"
-            )
+            raise RuntimeError(f"Milvus collection {name!r} still exists after drop")
         dropped.append(name)
     return {
         "targeted": list(DEMO_COLLECTION_NAMES),
@@ -630,23 +957,26 @@ def create_indexes(
     *,
     recreate: bool = False,
     client: Any | None = None,
+    sparse_compatibility_daat_maxscore: bool = False,
 ) -> dict[str, dict[str, list[str]]]:
     """Create vector and scalar indexes and verify their server-side names."""
 
     milvus_client = client or _connect_milvus_client(uri, token)
     report: dict[str, dict[str, list[str]]] = {}
     for collection_name, definitions in INDEX_DEFINITIONS.items():
-        if not milvus_client.has_collection(
-            collection_name=collection_name
-        ):
+        if not milvus_client.has_collection(collection_name=collection_name):
             raise RuntimeError(
                 f"Milvus collection {collection_name!r} does not exist; "
                 "run demo/scripts/create_collections.py first."
             )
-        existing = set(
-            milvus_client.list_indexes(collection_name=collection_name)
+        existing = set(milvus_client.list_indexes(collection_name=collection_name))
+        requested = _index_requests(
+            definitions,
+            sparse_compatibility_daat_maxscore=(
+                sparse_compatibility_daat_maxscore
+                and collection_name == "kb_chunks"
+            ),
         )
-        requested = _index_requests(definitions)
         created: list[str] = []
         retained: list[str] = []
         index_params = milvus_client.prepare_index_params()
@@ -668,9 +998,7 @@ def create_indexes(
                 index_params=index_params,
                 sync=True,
             )
-        verified = sorted(
-            milvus_client.list_indexes(collection_name=collection_name)
-        )
+        verified = sorted(milvus_client.list_indexes(collection_name=collection_name))
         expected = {str(item["index_name"]) for item in requested}
         missing = sorted(expected - set(verified))
         if missing:
@@ -691,8 +1019,7 @@ def _connect_milvus_client(uri: str, token: str | None) -> Any:
         milvus_module = import_module("pymilvus")
     except ImportError as exc:
         raise RuntimeError(
-            "Install pymilvus with `pip install -r "
-            "demo/requirements.txt`."
+            "Install pymilvus with `pip install -r demo/requirements.txt`."
         ) from exc
     kwargs: dict[str, Any] = {"uri": uri}
     if token:
@@ -702,17 +1029,22 @@ def _connect_milvus_client(uri: str, token: str | None) -> Any:
 
 def _index_requests(
     definitions: dict[str, Any],
+    *,
+    sparse_compatibility_daat_maxscore: bool = False,
 ) -> list[dict[str, Any]]:
     requests: list[dict[str, Any]] = []
     for field_name, definition in definitions.items():
         if field_name == "scalar_indexes":
             continue
+        params = dict(definition.get("params", {}))
+        if field_name == "sparse_vector" and sparse_compatibility_daat_maxscore:
+            params["inverted_index_algo"] = "DAAT_MAXSCORE"
         request = {
             "field_name": field_name,
             "index_name": f"{field_name}_idx",
             "index_type": definition["index_type"],
             "metric_type": definition["metric_type"],
-            "params": definition.get("params", {}),
+            "params": params,
         }
         requests.append(request)
     for field_name in definitions.get("scalar_indexes", []):

@@ -1,0 +1,71 @@
+{
+  "schema_version": "chunking-anchors-v1",
+  "cases": [
+    {
+      "case_id": "s3_pipeline_cohesion",
+      "question": "S3 同步如何完成 scanning、change detection、parsing、chunking 和 Milvus insertion？",
+      "filters": {
+        "department": "engineering",
+        "is_current": true
+      },
+      "expected_anchors": [
+        {
+          "source_uri": "s3://internal-agent-chat-demo/engineering/s3_sync_design.md",
+          "required_terms": [
+            "Bucket scanning",
+            "Change detection",
+            "Document parsing",
+            "Chunking",
+            "Milvus insertion"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "milvus_retrieval_cohesion",
+      "question": "Milvus 如何组合 vector retrieval、sparse retrieval、metadata filter、order_by 和 aggregation？",
+      "filters": {
+        "department": "engineering",
+        "is_current": true
+      },
+      "expected_anchors": [
+        {
+          "source_uri": "sample_data/local_docs/engineering/milvus_feature_map.md",
+          "required_terms": [
+            "vector retrieval",
+            "sparse retrieval",
+            "metadata filter",
+            "order_by",
+            "aggregation"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "customer_roadmap_coverage",
+      "question": "客户关心的问题是否被产品路线图覆盖？",
+      "filters": {
+        "department": "product",
+        "is_current": true
+      },
+      "expected_anchors": [
+        {
+          "source_uri": "s3://internal-agent-chat-demo/product/customer_meeting_notes.md",
+          "required_terms": [
+            "data freshness",
+            "citation",
+            "production ACL"
+          ]
+        },
+        {
+          "source_uri": "s3://internal-agent-chat-demo/product/roadmap_notes.md",
+          "required_terms": [
+            "data freshness",
+            "citation source cards",
+            "production ACL"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -89,7 +89,10 @@ class IngestionEvalMemoryTests(unittest.TestCase):
         )
         self.assertGreaterEqual(image_count, 5)
         self.assertTrue(
-            all(item["minhash_signature"] for item in result.dedup_signatures)
+            all("minhash_signature" not in item for item in result.dedup_signatures)
+        )
+        self.assertTrue(
+            all(item["normalized_text"] for item in result.dedup_signatures)
         )
         go_versions = {
             (item.doc_version, item.is_current)
@@ -97,7 +100,85 @@ class IngestionEvalMemoryTests(unittest.TestCase):
             if item.doc_id == "doc_go_button_guide"
         }
         self.assertEqual(go_versions, {("v1", False), ("v2", True)})
+        release_chunks = [
+            item
+            for item in result.kb_chunks
+            if item.doc_id == "doc_milvus_release_notes"
+        ]
+        self.assertEqual(
+            {
+                (item.doc_version, item.is_current)
+                for item in release_chunks
+            },
+            {("v2.6", False), ("v3.0", True)},
+        )
+        self.assertTrue(
+            all(item.section and item.doc_version for item in release_chunks)
+        )
+        self.assertTrue(
+            all(
+                item.metadata
+                and item.metadata.get("heading_path")
+                and item.section == item.metadata["heading_path"][-1]
+                for item in release_chunks
+            )
+        )
+        self.assertTrue(
+            all(
+                item.metadata
+                and item.metadata.get("retrieval_text_version")
+                == "title-heading-text-v1"
+                and "milvus" in item.sparse_vector
+                for item in release_chunks
+            )
+        )
+        self.assertEqual(
+            sum(
+                item.section == "Storage Format V2"
+                for item in release_chunks
+            ),
+            1,
+        )
+        self.assertEqual(
+            sum(
+                item.section == "Storage Format V3"
+                for item in release_chunks
+            ),
+            1,
+        )
         self.assertTrue(all(item.doc_version for item in result.kb_chunks))
+
+    def test_markdown_heading_keeps_paragraphs_in_one_feature_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            local = root / "local"
+            mock_s3 = root / "mock_s3"
+            local.mkdir()
+            mock_s3.mkdir()
+            (local / "release.md").write_text(
+                "# Release\n\n"
+                "Edition overview.\n\n"
+                "## Feature A\n\n"
+                "First feature paragraph.\n\n"
+                "Second feature paragraph.\n\n"
+                "## Feature B\n\n"
+                "Another feature.",
+                encoding="utf-8",
+            )
+
+            result = ingest_demo_sources(local, mock_s3)
+
+        self.assertEqual(
+            [item.section for item in result.kb_chunks],
+            ["Release", "Feature A", "Feature B"],
+        )
+        feature_a = result.kb_chunks[1]
+        self.assertIn("First feature paragraph.", feature_a.text)
+        self.assertIn("Second feature paragraph.", feature_a.text)
+        self.assertEqual(
+            feature_a.metadata["heading_path"],
+            ["Release", "Feature A"],
+        )
 
     def test_sample_assets_are_openable_file_formats(self) -> None:
         pdf_path = Path(

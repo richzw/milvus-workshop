@@ -3,19 +3,45 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from agent_workshop_demo.embedding import (
     cosine_similarity,
     dense_vector,
     sparse_vector,
 )
-from agent_workshop_demo.models import KBChunk, SearchResult
+from agent_workshop_demo.image_retrieval import (
+    image_cosine_score,
+    image_only_filters,
+    require_image_space,
+    validate_image_fingerprint,
+    validate_image_search_top_k,
+    validate_image_query_vector,
+)
+from agent_workshop_demo.models import (
+    ImageSearchResult,
+    KBChunk,
+    SearchResult,
+)
 from agent_workshop_demo.validation import normalize_filters
+
+OrderMode = Literal["relevance", "scalar"]
+AGGREGATION_FIELDS = frozenset(
+    {
+        "source_type",
+        "doc_type",
+        "department",
+        "has_image_vector",
+        "doc_version",
+        "is_current",
+    }
+)
 
 
 class HybridRetriever(Protocol):
     """Search and aggregation interface shared by retrieval adapters."""
+
+    supports_parallel_search: bool
 
     def search(
         self,
@@ -32,9 +58,27 @@ class HybridRetriever(Protocol):
         fields: list[str],
     ) -> dict[str, dict[str, int]]: ...
 
+    def fetch_document_chunks(
+        self,
+        *,
+        doc_id: str,
+        doc_version: str,
+        filters: dict[str, Any] | None = None,
+        limit: int,
+    ) -> list[KBChunk]: ...
+
+    def fetch_chunks_by_ids(
+        self,
+        *,
+        chunk_ids: list[str],
+        filters: dict[str, Any] | None = None,
+    ) -> list[KBChunk]: ...
+
 
 class InMemoryHybridRetriever:
     """Deterministic local replacement for the planned Milvus adapter."""
+
+    supports_parallel_search = True
 
     def __init__(self, chunks: list[KBChunk]) -> None:
         self.chunks = chunks
@@ -46,6 +90,7 @@ class InMemoryHybridRetriever:
         top_k: int,
         filters: dict[str, Any] | None = None,
         order_by: list[str] | None = None,
+        order_mode: OrderMode = "relevance",
     ) -> list[SearchResult]:
         """Return validated, score-first hybrid results."""
 
@@ -91,7 +136,11 @@ class InMemoryHybridRetriever:
                 )
             )
 
-        ordered = self._apply_order(results, order_by or [])[:top_k]
+        ordered = order_search_results(
+            results,
+            order_by or [],
+            order_mode=order_mode,
+        )[:top_k]
         return [
             SearchResult(
                 chunk=result.chunk,
@@ -105,6 +154,59 @@ class InMemoryHybridRetriever:
             for index, result in enumerate(ordered, start=1)
         ]
 
+    def search_image_vector(
+        self,
+        query_vector: list[float],
+        *,
+        image_fingerprint: str,
+        top_k: int,
+        filters: dict[str, Any] | None = None,
+    ) -> list[ImageSearchResult]:
+        """Return image-only COSINE results with vector-space validation."""
+
+        validate_image_search_top_k(top_k)
+        validated_query = validate_image_query_vector(query_vector)
+        validated_fingerprint = validate_image_fingerprint(
+            image_fingerprint
+        )
+        validated_filters = image_only_filters(filters)
+        filtered = self._apply_filters(
+            self.chunks,
+            validated_filters,
+        )
+        scored: list[tuple[float, KBChunk]] = []
+        for chunk in filtered:
+            require_image_space(
+                chunk,
+                expected_fingerprint=validated_fingerprint,
+            )
+            image_vector = chunk.image_vector
+            if image_vector is None:
+                raise ValueError(
+                    "Image search candidate is missing image_vector"
+                )
+            scored.append(
+                (
+                    image_cosine_score(
+                        validated_query,
+                        image_vector,
+                    ),
+                    chunk,
+                )
+            )
+        ordered = sorted(
+            scored,
+            key=lambda item: (-item[0], item[1].chunk_id),
+        )[:top_k]
+        return [
+            ImageSearchResult(
+                chunk=chunk,
+                rank=rank,
+                image_score=score,
+            )
+            for rank, (score, chunk) in enumerate(ordered, start=1)
+        ]
+
     def aggregations(
         self,
         results: list[SearchResult],
@@ -112,11 +214,60 @@ class InMemoryHybridRetriever:
     ) -> dict[str, dict[str, int]]:
         """Count requested public scalar fields over recalled results."""
 
+        requested = validate_aggregation_fields(fields)
         output: dict[str, dict[str, int]] = {}
-        for field in fields:
+        for field in requested:
             values = (str(getattr(item.chunk, field)) for item in results)
             output[field] = dict(sorted(Counter(values).items()))
         return output
+
+    def fetch_document_chunks(
+        self,
+        *,
+        doc_id: str,
+        doc_version: str,
+        filters: dict[str, Any] | None = None,
+        limit: int,
+    ) -> list[KBChunk]:
+        """Return authorized sibling chunks in stable document order."""
+
+        if not doc_id.strip() or not doc_version.strip():
+            raise ValueError("doc_id and doc_version must be non-empty")
+        if limit <= 0:
+            raise ValueError("limit must be greater than zero")
+        validated_filters = normalize_filters(filters)
+        filtered = self._apply_filters(self.chunks, validated_filters)
+        siblings = [
+            chunk
+            for chunk in filtered
+            if chunk.doc_id == doc_id and chunk.doc_version == doc_version
+        ]
+        return sorted(
+            siblings,
+            key=lambda chunk: (
+                chunk.chunk_index,
+                chunk.page_no or 0,
+                chunk.chunk_id,
+            ),
+        )[:limit]
+
+    def fetch_chunks_by_ids(
+        self,
+        *,
+        chunk_ids: list[str],
+        filters: dict[str, Any] | None = None,
+    ) -> list[KBChunk]:
+        """Return authorized chunks for bounded cache freshness checks."""
+
+        expected = list(dict.fromkeys(chunk_ids))
+        if not 1 <= len(expected) <= 16 or any(
+            not item.strip() for item in expected
+        ):
+            raise ValueError("chunk_ids must contain 1..16 non-empty ids")
+        validated_filters = normalize_filters(filters)
+        allowed = self._apply_filters(self.chunks, validated_filters)
+        by_id = {chunk.chunk_id: chunk for chunk in allowed}
+        return [by_id[item] for item in expected if item in by_id]
 
     @staticmethod
     def _apply_filters(
@@ -150,30 +301,60 @@ class InMemoryHybridRetriever:
             sum(chunk_sparse[token] for token in overlap) * 4,
         )
 
-    @staticmethod
-    def _apply_order(
-        results: list[SearchResult],
-        order_by: list[str],
-    ) -> list[SearchResult]:
-        supported_fields = {"updated_at", "priority"}
-        parsed: list[tuple[str, str]] = []
-        for clause in order_by:
-            parts = clause.split()
-            field = parts[0] if parts else ""
-            direction = parts[1].lower() if len(parts) > 1 else "asc"
-            if (
-                field not in supported_fields
-                or direction not in {"asc", "desc"}
-                or len(parts) > 2
-            ):
-                raise ValueError(f"Unsupported order_by clause: {clause!r}")
-            parsed.append((field, direction))
 
-        def key(result: SearchResult) -> tuple[float, ...]:
-            tie_breakers: list[float] = []
-            for field, direction in parsed:
-                value = float(getattr(result.chunk, field))
-                tie_breakers.append(value if direction == "asc" else -value)
-            return (-result.hybrid_score, *tie_breakers)
 
-        return sorted(results, key=key)
+def parse_order_by(order_by: list[str]) -> list[tuple[str, str]]:
+    """Validate public ordering clauses before any adapter I/O."""
+
+    parsed: list[tuple[str, str]] = []
+    for clause in order_by:
+        parts = clause.split()
+        field = parts[0] if parts else ""
+        direction = parts[1].lower() if len(parts) > 1 else "asc"
+        if (
+            field not in {"updated_at", "priority"}
+            or direction not in {"asc", "desc"}
+            or len(parts) > 2
+        ):
+            raise ValueError(f"Unsupported order_by clause: {clause!r}")
+        parsed.append((field, direction))
+    return parsed
+
+
+def validate_aggregation_fields(fields: list[str]) -> list[str]:
+    """Return de-duplicated public facet fields or fail before adapter I/O."""
+
+    requested = list(dict.fromkeys(fields))
+    if any(field not in AGGREGATION_FIELDS for field in requested):
+        raise ValueError("Unsupported aggregation field")
+    return requested
+
+
+def order_search_results(
+    results: list[SearchResult],
+    order_by: list[str],
+    *,
+    order_mode: OrderMode,
+) -> list[SearchResult]:
+    """Apply the shared relevance-first or scalar-primary order contract."""
+
+    if order_mode not in {"relevance", "scalar"}:
+        raise ValueError(f"Unsupported order_mode: {order_mode!r}")
+    parsed = parse_order_by(order_by)
+
+    def scalar_key(result: SearchResult) -> tuple[float, ...]:
+        return tuple(
+            float(getattr(result.chunk, field))
+            * (1 if direction == "asc" else -1)
+            for field, direction in parsed
+        )
+
+    if order_mode == "scalar" and parsed:
+        return sorted(
+            results,
+            key=lambda item: (*scalar_key(item), -item.hybrid_score, item.chunk.chunk_id),
+        )
+    return sorted(
+        results,
+        key=lambda item: (-item.hybrid_score, *scalar_key(item), item.chunk.chunk_id),
+    )
