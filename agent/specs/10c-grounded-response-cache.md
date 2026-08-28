@@ -84,6 +84,12 @@ class GroundedResponseCacheRecord:
     created_at: int
     expires_at: int
 
+@dataclass(frozen=True)
+class ResponseCacheCandidate:
+    record: GroundedResponseCacheRecord
+    similarity: float
+    match_type: str  # exact | semantic
+
 class GroundedResponseCache(Protocol):
     def search(
         self,
@@ -97,7 +103,7 @@ class GroundedResponseCache(Protocol):
     def delete_session(self, session_id: str) -> int: ...
 ```
 
-`ResponseCacheCandidate` adds `similarity` and `match_type=exact|semantic` without changing the stored record.
+`ResponseCacheCandidate` wraps a stored record with `similarity` and `match_type=exact|semantic`; it never changes the stored record.
 
 The Milvus collection is named `grounded_response_cache`. Required scalar fields are query/session identity, classification scope, permission/KB/workflow revisions and lifecycle timestamps. `answer` is bounded to 12,000 characters. Citations, evidence, version scope, entity ids and query constraints are bounded JSON. `query_vector` uses the configured 1,024-dimensional text embedding space.
 

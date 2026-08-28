@@ -29,6 +29,11 @@ from agent_workshop_demo.schema.pymilvus_adapter import (
     MilvusDedupStore,
     MilvusHybridRetriever,
 )
+from agent_workshop_demo.struct_array import (
+    MilvusStructArrayStore,
+    build_struct_array_projection,
+    load_projection_manifest,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -83,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Build records without connecting to Milvus.",
     )
+    parser.add_argument(
+        "--struct-array-projection",
+        choices=("disabled", "build"),
+        default="disabled",
+        help="Validate/build kb_documents after authoritative chunk ingestion.",
+    )
     args = parser.parse_args(argv)
     minio_report: dict[str, object] = {}
     if args.s3_source == "minio":
@@ -108,20 +119,11 @@ def main(argv: list[str] | None = None) -> int:
             version_manifest_path=args.version_manifest,
         )
         minio_report = {"s3_source": "mock"}
-    paths = (
-        write_ingestion_result(result, args.output_dir)
-        if args.output_dir
-        else {}
-    )
+    paths = write_ingestion_result(result, args.output_dir) if args.output_dir else {}
     report: dict[str, object] = {
-        "source_documents": len(
-            {chunk.doc_id for chunk in result.kb_chunks}
-        ),
+        "source_documents": len({chunk.doc_id for chunk in result.kb_chunks}),
         "document_editions": len(
-            {
-                (chunk.doc_id, chunk.doc_version)
-                for chunk in result.kb_chunks
-            }
+            {(chunk.doc_id, chunk.doc_version) for chunk in result.kb_chunks}
         ),
         "generated_chunks": len(result.kb_chunks),
         "embedded_chunks": len(result.kb_chunks),
@@ -130,6 +132,17 @@ def main(argv: list[str] | None = None) -> int:
         "jsonl": {key: str(value) for key, value in paths.items()},
         **minio_report,
     }
+    projection = None
+    if args.struct_array_projection == "build":
+        projection = build_struct_array_projection(
+            result.kb_chunks,
+            load_projection_manifest(),
+        )
+        report["struct_array_projection"] = {
+            "projection_fingerprint": projection.projection_fingerprint,
+            "parent_count": projection.parent_count,
+            "passage_count": projection.passage_count,
+        }
     if args.dry_run:
         report["dry_run"] = True
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -145,15 +158,21 @@ def main(argv: list[str] | None = None) -> int:
         adapter.client,
         batch_size=args.batch_size,
     ).insert(result.dedup_signatures)
-    verified = adapter.verify_inserted(
-        chunk.chunk_id for chunk in result.kb_chunks
-    )
+    verified = adapter.verify_inserted(chunk.chunk_id for chunk in result.kb_chunks)
+    projection_report: dict[str, object] = {}
+    if projection is not None:
+        projection_report = {
+            "struct_array_activation": MilvusStructArrayStore(
+                adapter.client
+            ).replace_projection(projection, retrieval_mode="disabled")
+        }
     report.update(
         {
             "collection": args.collection_name,
             **insert_report,
             **dedup_report,
             "verified_count": verified,
+            **projection_report,
         }
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

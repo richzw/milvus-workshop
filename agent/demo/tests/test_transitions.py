@@ -140,8 +140,8 @@ class WorkflowTransitionTests(unittest.TestCase):
                     setattr(item, "terminal_status", "answered"),
                 ),
                 EvidenceAction.ANSWER,
-                WorkflowNode.GENERATE_CANDIDATE_ANSWER,
-                TransitionReason.EVIDENCE_TERMINAL,
+                WorkflowNode.PREPARE_GENERATION_CONTEXT,
+                TransitionReason.EVIDENCE_READY_FOR_CONTEXT,
             ),
             (
                 WorkflowNode.EVALUATE_EVIDENCE,

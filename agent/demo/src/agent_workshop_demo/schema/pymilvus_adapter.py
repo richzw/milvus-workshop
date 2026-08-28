@@ -44,6 +44,8 @@ from agent_workshop_demo.schema.collections import (
     GROUNDED_RESPONSE_CACHE_INDEXES,
     KB_CHUNKS_COLLECTION,
     KB_CHUNKS_INDEXES,
+    KB_DOCUMENTS_COLLECTION,
+    KB_DOCUMENTS_INDEXES,
     MEMORY_EVENTS_COLLECTION,
     MEMORY_EVENTS_INDEXES,
     MEMORY_FACTS_COLLECTION,
@@ -53,8 +55,9 @@ from agent_workshop_demo.schema.collections import (
 )
 from agent_workshop_demo.validation import normalize_filters, validate_question
 
-COLLECTION_DEFINITIONS = [
+COLLECTION_DEFINITIONS: list[dict[str, Any]] = [
     KB_CHUNKS_COLLECTION,
+    KB_DOCUMENTS_COLLECTION,
     CONVERSATION_MEMORY_COLLECTION,
     MEMORY_EVENTS_COLLECTION,
     MEMORY_FACTS_COLLECTION,
@@ -63,8 +66,9 @@ COLLECTION_DEFINITIONS = [
     DOC_DEDUP_SIGNATURES_COLLECTION,
 ]
 
-INDEX_DEFINITIONS = {
+INDEX_DEFINITIONS: dict[str, dict[str, Any]] = {
     str(KB_CHUNKS_COLLECTION["collection_name"]): KB_CHUNKS_INDEXES,
+    str(KB_DOCUMENTS_COLLECTION["collection_name"]): KB_DOCUMENTS_INDEXES,
     str(CONVERSATION_MEMORY_COLLECTION["collection_name"]): CONVERSATION_MEMORY_INDEXES,
     str(MEMORY_EVENTS_COLLECTION["collection_name"]): MEMORY_EVENTS_INDEXES,
     str(MEMORY_FACTS_COLLECTION["collection_name"]): MEMORY_FACTS_INDEXES,
@@ -82,6 +86,7 @@ DEMO_COLLECTION_NAMES = tuple(
     str(definition["collection_name"]) for definition in COLLECTION_DEFINITIONS
 )
 _FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_LOCAL_BOOL_FACET_FIELDS = frozenset({"has_image_vector", "is_current"})
 
 
 class MilvusHybridRetriever:
@@ -253,6 +258,44 @@ class MilvusHybridRetriever:
             )
         self.client.load_collection(collection_name=self.collection_name)
 
+    def ensure_embedding_space_ready(self, *, sample_size: int = 8) -> str:
+        """Fail startup when stored chunks predate the configured vector space.
+
+        Spec 15 § 7 makes the recorded embedding fingerprint the migration gate:
+        a provider or model change without a matching re-ingest must stop the
+        process instead of serving two silently mixed vector spaces.
+        """
+
+        if not 1 <= sample_size <= 64:
+            raise ValueError("sample_size must be between 1 and 64")
+        expected = text_embedding_fingerprint()
+        try:
+            rows = self.client.query(
+                collection_name=self.collection_name,
+                filter="",
+                output_fields=["chunk_id", "metadata"],
+                limit=sample_size,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Unable to read the stored text embedding fingerprint from "
+                f"collection {self.collection_name!r}"
+            ) from exc
+        observed = {
+            str(_entity_metadata(row).get(EMBEDDING_FINGERPRINT_KEY))
+            for row in rows
+        }
+        if not observed:
+            return expected
+        if observed != {expected}:
+            raise RuntimeError(
+                "Stored chunks were embedded in a different vector space: "
+                f"expected {expected!r}, found {sorted(observed)!r}. "
+                "Re-ingest demo/scripts/ingest_demo.py after an embedding "
+                "provider or model change."
+            )
+        return expected
+
     def verify_inserted(self, chunk_ids: Iterable[str]) -> int:
         """Read inserted chunk IDs back from Milvus and require all of them."""
 
@@ -348,9 +391,7 @@ class MilvusHybridRetriever:
 
         validate_image_search_top_k(top_k)
         validated_query = validate_image_query_vector(query_vector)
-        validated_fingerprint = validate_image_fingerprint(
-            image_fingerprint
-        )
+        validated_fingerprint = validate_image_fingerprint(image_fingerprint)
         configured_fingerprint = image_embedding_fingerprint()
         if validated_fingerprint != configured_fingerprint:
             raise ValueError(
@@ -390,40 +431,106 @@ class MilvusHybridRetriever:
             )
         return results
 
+    def search_sparse(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        filters: dict[str, Any] | None = None,
+        order_by: list[str] | None = None,
+    ) -> list[SearchResult]:
+        """Run the authoritative BM25 lane without dense recall."""
+
+        normalized_query = validate_question(query)
+        if top_k <= 0:
+            raise ValueError("top_k must be greater than zero")
+        parsed_order = parse_order_by(order_by or [])
+        common: dict[str, Any] = {
+            "collection_name": self.collection_name,
+            "data": [normalized_query],
+            "anns_field": self.sparse_field,
+            "search_params": {"metric_type": "BM25", "params": {}},
+            "filter": _filter_expression(normalize_filters(filters)),
+            "limit": top_k,
+            "output_fields": _chunk_output_fields(),
+        }
+        if parsed_order:
+            common["order_by_fields"] = [
+                {"field": field, "order": direction}
+                for field, direction in parsed_order
+            ]
+        raw_hits = self.client.search(**common)
+        results: list[SearchResult] = []
+        for rank, hit in enumerate(_first_query_hits(raw_hits)[:top_k], start=1):
+            chunk = _chunk_from_entity(_hit_entity(hit))
+            _require_matching_embedding_fingerprint(chunk)
+            score = _hit_score(hit)
+            results.append(
+                SearchResult(
+                    chunk=chunk,
+                    rank=rank,
+                    dense_score=0.0,
+                    keyword_score=score,
+                    recency_score=0.0,
+                    priority_score=0.0,
+                    hybrid_score=score,
+                    retrieval_profile="flat_bm25",
+                    retrieval_paths=("flat_bm25",),
+                )
+            )
+        return results
+
     def aggregations(
         self,
         results: list[SearchResult],
         fields: list[str],
     ) -> dict[str, dict[str, int]]:
-        """Aggregate public facets server-side over the retained candidates."""
+        """Aggregate facets over the retained, de-duplicated candidates."""
 
         requested = validate_aggregation_fields(fields)
-        chunk_ids = list(dict.fromkeys(item.chunk.chunk_id for item in results))
+        candidates: dict[str, KBChunk] = {}
+        for item in results:
+            candidates.setdefault(item.chunk.chunk_id, item.chunk)
+        chunk_ids = list(candidates)
         if len(chunk_ids) > 64:
             raise ValueError("Aggregation candidate set exceeds 64 chunks")
-        output: dict[str, dict[str, int]] = {
-            field: {} for field in requested
-        }
+        output: dict[str, dict[str, int]] = {field: {} for field in requested}
         if not requested or not chunk_ids:
             return output
-        rows = self.client.query(
-            collection_name=self.collection_name,
-            filter="chunk_id in " + json.dumps(chunk_ids, ensure_ascii=False),
-            group_by_fields=requested,
-            output_fields=[*requested, "count(*)"],
-            limit=64,
-        )
-        for row in rows:
-            if not isinstance(row, dict):
-                raise ValueError("Milvus aggregation returned an invalid row")
-            raw_count = row.get("count(*)", row.get("count_all"))
-            if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count <= 0:
-                raise ValueError("Milvus aggregation returned an invalid count")
-            for field in requested:
-                if field not in row:
-                    raise ValueError("Milvus aggregation row is missing a field")
-                key = str(row[field])
-                output[field][key] = output[field].get(key, 0) + raw_count
+
+        grouped_fields = [
+            field for field in requested if field not in _LOCAL_BOOL_FACET_FIELDS
+        ]
+        if grouped_fields:
+            rows = self.client.query(
+                collection_name=self.collection_name,
+                filter="chunk_id in " + json.dumps(chunk_ids, ensure_ascii=False),
+                group_by_fields=grouped_fields,
+                output_fields=[*grouped_fields, "count(*)"],
+                limit=64,
+            )
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise ValueError("Milvus aggregation returned an invalid row")
+                raw_count = row.get("count(*)", row.get("count_all"))
+                if (
+                    isinstance(raw_count, bool)
+                    or not isinstance(raw_count, int)
+                    or raw_count <= 0
+                ):
+                    raise ValueError("Milvus aggregation returned an invalid count")
+                for field in grouped_fields:
+                    if field not in row:
+                        raise ValueError("Milvus aggregation row is missing a field")
+                    key = str(row[field])
+                    output[field][key] = output[field].get(key, 0) + raw_count
+
+        for field in requested:
+            if field not in _LOCAL_BOOL_FACET_FIELDS:
+                continue
+            for chunk in candidates.values():
+                key = str(getattr(chunk, field))
+                output[field][key] = output[field].get(key, 0) + 1
         if any(sum(counts.values()) != len(chunk_ids) for counts in output.values()):
             raise ValueError("Milvus aggregation counts do not match candidate scope")
         return {field: dict(sorted(counts.items())) for field, counts in output.items()}
@@ -603,9 +710,7 @@ def _require_matching_embedding_fingerprint(chunk: KBChunk) -> None:
         )
     if chunk.has_image_vector:
         expected_image = image_embedding_fingerprint()
-        actual_image = (chunk.metadata or {}).get(
-            IMAGE_EMBEDDING_FINGERPRINT_KEY
-        )
+        actual_image = (chunk.metadata or {}).get(IMAGE_EMBEDDING_FINGERPRINT_KEY)
         if actual_image != expected_image:
             raise ValueError(
                 "Chunk image embedding fingerprint does not match the "
@@ -620,9 +725,7 @@ def _chunk_retrieval_text(chunk: KBChunk) -> str:
     metadata = chunk.metadata or {}
     raw_path = metadata.get("heading_path", [])
     heading_path = (
-        tuple(str(item) for item in raw_path)
-        if isinstance(raw_path, list)
-        else ()
+        tuple(str(item) for item in raw_path) if isinstance(raw_path, list) else ()
     )
     parts: list[str] = []
     for value in (
@@ -742,15 +845,17 @@ def _chunk_output_fields() -> list[str]:
         field["name"]
         for field in KB_CHUNKS_COLLECTION["fields"]
         if field["name"] != "id"
-        and (
-            field["name"] == "image_vector"
-            or field["type"] not in vector_types
-        )
+        and (field["name"] == "image_vector" or field["type"] not in vector_types)
     ]
 
 
 def _hit_score(hit: dict[str, Any]) -> float:
     return float(hit.get("distance", hit.get("score", 0.0)))
+
+
+def _entity_metadata(entity: dict[str, Any]) -> dict[str, Any]:
+    raw = entity.get("metadata")
+    return dict(raw) if isinstance(raw, dict) else {}
 
 
 def _chunk_from_entity(entity: dict[str, Any]) -> KBChunk:
@@ -832,12 +937,15 @@ def build_collection_schema(definition: dict[str, Any]) -> Any:
         "SparseFloatVector": milvus_module.DataType.SPARSE_FLOAT_VECTOR,
         "BinaryVector": milvus_module.DataType.BINARY_VECTOR,
         "TIMESTAMPTZ": milvus_module.DataType.TIMESTAMPTZ,
+        "Array": milvus_module.DataType.ARRAY,
     }
-    fields = []
+    schema = milvus_module.MilvusClient.create_schema(
+        auto_id=False,
+        enable_dynamic_field=False,
+        description=definition["description"],
+    )
     for field in definition["fields"]:
         kwargs = {
-            "name": field["name"],
-            "dtype": type_map[field["type"]],
             "description": field.get("description", ""),
             "is_primary": field.get("primary_key", False),
             "auto_id": field.get("auto_id", False),
@@ -851,27 +959,57 @@ def build_collection_schema(definition: dict[str, Any]) -> Any:
             kwargs["enable_analyzer"] = field["enable_analyzer"]
         if "analyzer_params" in field:
             kwargs["analyzer_params"] = field["analyzer_params"]
-        fields.append(milvus_module.FieldSchema(**kwargs))
-    function_types = {
-        "BM25": milvus_module.FunctionType.BM25,
-        "MINHASH": milvus_module.FunctionType.MINHASH,
-    }
-    functions = [
-        milvus_module.Function(
-            name=function["name"],
-            function_type=function_types[function["type"]],
-            input_field_names=function["input_fields"],
-            output_field_names=function["output_fields"],
-            params=function.get("params", {}),
+        if field["type"] == "Array":
+            if field.get("element_type") != "Struct":
+                raise ValueError("Only StructArray definitions are supported")
+            struct_schema = milvus_module.MilvusClient.create_struct_field_schema()
+            for subfield in field.get("struct_fields", []):
+                sub_kwargs = {
+                    "field_name": subfield["name"],
+                    "datatype": type_map[subfield["type"]],
+                }
+                if "max_length" in subfield:
+                    sub_kwargs["max_length"] = subfield["max_length"]
+                if "dim" in subfield:
+                    sub_kwargs["dim"] = subfield["dim"]
+                struct_schema.add_field(**sub_kwargs)
+            kwargs.update(
+                {
+                    "element_type": milvus_module.DataType.STRUCT,
+                    "struct_schema": struct_schema,
+                    "max_capacity": field["max_capacity"],
+                }
+            )
+        schema.add_field(
+            field_name=field["name"],
+            datatype=type_map[field["type"]],
+            **kwargs,
         )
-        for function in definition.get("functions", [])
-    ]
-    return milvus_module.CollectionSchema(
-        fields=fields,
-        functions=functions,
-        description=definition["description"],
-        enable_dynamic_field=False,
-    )
+    for function in definition.get("functions", []):
+        function_type = _required_function_type(milvus_module, function["type"])
+        schema.add_function(
+            milvus_module.Function(
+                name=function["name"],
+                function_type=function_type,
+                input_field_names=function["input_fields"],
+                output_field_names=function["output_fields"],
+                params=function.get("params", {}),
+            )
+        )
+    return schema
+
+
+def _required_function_type(milvus_module: Any, name: str) -> Any:
+    """Resolve one server Function type with an actionable SDK diagnostic."""
+
+    function_type = getattr(milvus_module.FunctionType, name, None)
+    if function_type is None:
+        raise RuntimeError(
+            f"The installed pymilvus does not expose FunctionType.{name}. "
+            "The demo schema requires the pinned pymilvus==3.0.1 from "
+            "demo/requirements.txt."
+        )
+    return function_type
 
 
 def create_collections(
@@ -973,8 +1111,7 @@ def create_indexes(
         requested = _index_requests(
             definitions,
             sparse_compatibility_daat_maxscore=(
-                sparse_compatibility_daat_maxscore
-                and collection_name == "kb_chunks"
+                sparse_compatibility_daat_maxscore and collection_name == "kb_chunks"
             ),
         )
         created: list[str] = []
@@ -1006,12 +1143,48 @@ def create_indexes(
                 f"Milvus index verification failed for {collection_name}: "
                 + ", ".join(missing)
             )
+        for request in requested:
+            _verify_server_index(milvus_client, collection_name, request)
         report[collection_name] = {
             "created": created,
             "existing": retained,
             "verified": sorted(expected),
         }
     return report
+
+
+def _verify_server_index(
+    client: Any,
+    collection_name: str,
+    request: dict[str, Any],
+) -> None:
+    index_name = str(request["index_name"])
+    description = client.describe_index(
+        collection_name=collection_name,
+        index_name=index_name,
+    )
+    if not isinstance(description, dict):
+        raise RuntimeError(
+            f"Milvus index verification returned an invalid {index_name!r} description"
+        )
+    expected = {
+        "field_name": str(request["field_name"]),
+        "index_name": index_name,
+        "index_type": str(request["index_type"]),
+    }
+    if "metric_type" in request:
+        expected["metric_type"] = str(request["metric_type"])
+    mismatches = [
+        field
+        for field, value in expected.items()
+        if str(description.get(field, "")).upper() != value.upper()
+    ]
+    if mismatches:
+        raise RuntimeError(
+            f"Milvus index {collection_name}.{index_name} differs in "
+            + ", ".join(mismatches)
+            + "; rerun with --recreate"
+        )
 
 
 def _connect_milvus_client(uri: str, token: str | None) -> Any:
@@ -1041,19 +1214,35 @@ def _index_requests(
             params["inverted_index_algo"] = "DAAT_MAXSCORE"
         request = {
             "field_name": field_name,
-            "index_name": f"{field_name}_idx",
+            "index_name": definition.get("index_name", f"{field_name}_idx"),
             "index_type": definition["index_type"],
             "metric_type": definition["metric_type"],
             "params": params,
         }
         requests.append(request)
-    for field_name in definitions.get("scalar_indexes", []):
+    for definition in definitions.get("scalar_indexes", []):
+        if isinstance(definition, str):
+            field_name = definition
+            index_type = "INVERTED"
+            scalar_params: dict[str, Any] = {}
+        elif (
+            isinstance(definition, dict)
+            and set(definition).issubset({"field_name", "index_type", "params"})
+            and isinstance(definition.get("field_name"), str)
+            and isinstance(definition.get("index_type"), str)
+            and isinstance(definition.get("params", {}), dict)
+        ):
+            field_name = definition["field_name"]
+            index_type = definition["index_type"]
+            scalar_params = dict(definition.get("params", {}))
+        else:
+            raise ValueError("Scalar index definition is invalid")
         requests.append(
             {
                 "field_name": field_name,
                 "index_name": f"{field_name}_idx",
-                "index_type": "INVERTED",
-                "params": {},
+                "index_type": index_type,
+                "params": scalar_params,
             }
         )
     return requests

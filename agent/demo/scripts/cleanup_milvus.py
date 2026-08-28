@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         "--confirm-drop-demo-data",
         action="store_true",
         help=(
-            "Actually drop the four demo collections. Without this flag, "
+            "Actually drop the eight demo collections. Without this flag, "
             "the command is a connection-free preview."
         ),
     )

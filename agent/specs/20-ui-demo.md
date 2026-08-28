@@ -27,7 +27,7 @@ Streamlit UI 是 Workshop 的自然语言入口和解释层。用户只负责提
 ## 3. Interaction lifecycle
 
 1. User submits one natural-language question; UI sends no metadata filters.
-2. UI consumes ordered `trace_event` envelopes and updates one in-message progress timeline while the Agent classifies intent, resolves terminology, checks permission, selects tools, plans, retrieves, reranks and grades evidence.
+2. UI consumes ordered `trace_event` envelopes and updates one in-message progress timeline while the Agent classifies intent, resolves terminology, checks permission, selects tools, transforms the query, retrieves, reranks, grades evidence and optionally prepares compressed generation context.
 3. When evidence is sufficient, citation-validated answer chunks render only after the verification event; otherwise Chat shows permission denial, unsupported-operation refusal, abstain or execution failure.
 4. Evidence and the persisted Agent Trace reconcile to the same terminal snapshot and `query_id`.
 5. A new query appends user/assistant messages to visible session history, creates a new event list, and uses the same stable `session_id`.
@@ -44,9 +44,13 @@ Streamlit UI 是 Workshop 的自然语言入口和解释层。用户只负责提
 
 ### 4.2 Evidence
 
-- **Tool Recall Results**: tool, subquery, rank, hybrid score, source, document version, chunk/page, snippet.
+- **Tool Recall Results**: tool, subquery, retrieval profile/granularity, rank, hybrid score, source, document version, chunk/page, snippet; StructArray element hits may show a bounded offset as execution provenance.
+- **Document Shortlist**: only when EmbeddingList/two-stage retrieval ran, show parent document, MaxSim rank and whether a later element resolved citeable evidence. Label it as routing rather than evidence.
 - **Reranked Results**: new rank, rerank score, old rank, source, selected flag.
 - **Coverage Summary**: covered/missing aspects and contradictions.
+- **Generation Context Summary**: compression mode, retained source count and
+  before/after character counts; compressed text and support spans remain
+  private workflow data.
 
 Selected context is visually identifiable. Tool filters may be displayed as trace metadata, but never as editable controls.
 
@@ -71,10 +75,13 @@ The Agent Trace tab replays the same event list in execution order and shows:
 - intent/topic/retrieval goal、classifier/model/confidence/fallback、matched or ambiguous entities、catalog version 与 `need_retrieval`;
 - permission decision;
 - selected tools and routing reasons;
-- decomposed subqueries and dependency edges;
+- query-transformation strategy, primary/background/aspect/hop roles,
+  transformed subqueries and dependency edges;
 - every tool call, safe filters, version scope, count and latency;
+- StructArray mode, parent/element query granularity, same-element filter usage, parent-shortlist/resolved-element counts and collapse status;
 - merged recall, reranker and evidence grade;
 - supplementary retrieval rounds and unresolved aspects;
+- context-compression mode, implementation, reduction counts and safe fallback;
 - generator/fallback and citation/self-check;
 - per-stage latency and terminal status.
 
@@ -116,6 +123,10 @@ The UI never lets a user edit salience, decay score, permission scope or active 
 12. An incomplete/failed workflow stream appends no assistant turn and persists no current-turn Memory.
 13. Clearing deletes only active-session Memory and response-cache records, then resets messages/events/last response; it does not drop collections.
 14. A recall/display action never refreshes Memory lifecycle; only an explicit reconfirmation or validated outcome may do so.
+15. UI never treats a step-back background query as the user's original
+    question and never presents compressed/derived text as a new source;
+    citations and source cards continue to resolve to original chunks.
+16. A StructArray offset is shown only beside its resolved `chunk_id`; parent-only EmbeddingList/MATCH/collapse rows are visually labeled “document routing” and never receive `[Cn]` markers or selected-evidence styling.
 
 ## 6. Error states
 
@@ -127,6 +138,8 @@ The UI never lets a user edit salience, decay score, permission scope or active 
 | Retry exhausted | show abstain reason, attempted tools and unresolved aspects |
 | Milvus unavailable | show setup error; do not generate an ungrounded answer |
 | Generator/citation validation failure | show sanitized fallback or contextual execution error |
+| Query transformation unavailable | continue with labeled deterministic identity/rule plan |
+| Context compression unavailable/invalid | continue with original selected context and a non-blocking safe fallback label |
 | Memory empty | continue normally and label that no prior session context matched |
 | Memory recall/write unavailable | keep a valid answer, show a sanitized degraded warning, never show raw dependency text |
 

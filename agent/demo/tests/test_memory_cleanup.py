@@ -282,7 +282,7 @@ class MemoryCleanupTests(unittest.TestCase):
         self.assertIn('session_id == "session_a"', fact_page["filter"])
         self.assertIn('status == "tombstoned"', fact_page["filter"])
         self.assertIn(
-            'expires_at <= "1970-01-01T00:00:02.000Z"',
+            "expires_at <= ISO '1970-01-01T00:00:02.000Z'",
             event_page["filter"],
         )
         self.assertTrue(

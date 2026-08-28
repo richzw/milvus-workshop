@@ -1,0 +1,279 @@
+{
+  "registry_version": "eval-metric-registry-v1",
+  "metrics": [
+    {
+      "metric_id": "goal.retrieval_recall_at_20",
+      "role": "goal",
+      "question": "Did retrieval recall the expected sources in the first 20 results?",
+      "source": {
+        "kind": "product_goal",
+        "ref": "specs/70-quality-and-evaluation.md#40a-initial-active-registry"
+      },
+      "owner": "retrieval-owner",
+      "grader_id": "retrieval_recall_at_20",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "aggregate.recall_at_k",
+      "threshold_or_budget": {
+        "mode": "gate",
+        "operator": "gte",
+        "value": 0.9,
+        "unit": "ratio"
+      },
+      "decision_action": ["reject_change", "open_investigation"],
+      "cost_class": "near_zero",
+      "run_cadence": "per_pr",
+      "retirement_condition": "Review after 90 days at 100% without changing a retrieval decision.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    },
+    {
+      "metric_id": "goal.selected_context_recall_at_5",
+      "role": "goal",
+      "question": "Did the first five selected context records retain the required sources?",
+      "source": {
+        "kind": "product_goal",
+        "ref": "specs/70-quality-and-evaluation.md#40a-initial-active-registry"
+      },
+      "owner": "rag-quality-owner",
+      "grader_id": "selected_context_recall_at_5",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "aggregate.selected_context_recall_at_5",
+      "threshold_or_budget": {
+        "mode": "gate",
+        "operator": "gte",
+        "value": 0.9,
+        "unit": "ratio"
+      },
+      "decision_action": ["rollback", "open_investigation"],
+      "cost_class": "near_zero",
+      "run_cadence": "per_pr",
+      "retirement_condition": "Review after 90 days at 100% without changing a context-selection decision.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    },
+    {
+      "metric_id": "goal.required_fact_coverage",
+      "role": "goal",
+      "question": "Did the answer cover the required facts for applicable golden cases?",
+      "source": {
+        "kind": "product_goal",
+        "ref": "specs/00-prd.md#7-success-metrics"
+      },
+      "owner": "answer-quality-owner",
+      "grader_id": "required_fact_coverage",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "aggregate.required_fact_coverage",
+      "threshold_or_budget": {
+        "mode": "gate",
+        "operator": "gte",
+        "value": 0.9,
+        "unit": "ratio"
+      },
+      "decision_action": ["rollback", "open_investigation"],
+      "cost_class": "near_zero",
+      "run_cadence": "per_pr",
+      "retirement_condition": "Review after 90 days at 100% without changing an answer-quality decision.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    },
+    {
+      "metric_id": "guardrail.citation_resolve_rate",
+      "role": "guardrail",
+      "question": "Did every trial emit only citations that resolve to its selected context?",
+      "source": {
+        "kind": "hard_constraint",
+        "ref": "specs/70-quality-and-evaluation.md#41-correctness-gates"
+      },
+      "owner": "rag-safety-owner",
+      "grader_id": "citation_resolve_rate",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "aggregate.citation_resolve_rate",
+      "threshold_or_budget": {
+        "mode": "gate",
+        "operator": "eq",
+        "value": 1.0,
+        "unit": "ratio"
+      },
+      "decision_action": ["block_deploy", "rollback"],
+      "cost_class": "near_zero",
+      "run_cadence": "per_pr",
+      "retirement_condition": "Retire only when the citation-resolution constraint is formally removed.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    },
+    {
+      "metric_id": "guardrail.abstention_correctness",
+      "role": "guardrail",
+      "question": "Did every case make the expected answer-versus-abstain decision?",
+      "source": {
+        "kind": "hard_constraint",
+        "ref": "specs/70-quality-and-evaluation.md#41-correctness-gates"
+      },
+      "owner": "answer-quality-owner",
+      "grader_id": "abstention_correctness",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "aggregate.abstention_accuracy",
+      "threshold_or_budget": {
+        "mode": "gate",
+        "operator": "eq",
+        "value": 1.0,
+        "unit": "ratio"
+      },
+      "decision_action": ["block_deploy", "open_investigation"],
+      "cost_class": "near_zero",
+      "run_cadence": "per_pr",
+      "retirement_condition": "Retire only when the abstention constraint is formally removed.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    },
+    {
+      "metric_id": "guardrail.permission_bypass_count",
+      "role": "guardrail",
+      "question": "How many denied trials performed private retrieval before terminating?",
+      "source": {
+        "kind": "hard_constraint",
+        "ref": "specs/70-quality-and-evaluation.md#41-correctness-gates"
+      },
+      "owner": "security-owner",
+      "grader_id": "permission_bypass_count",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "aggregate.permission_bypass_count",
+      "threshold_or_budget": {
+        "mode": "gate",
+        "operator": "eq",
+        "value": 0.0,
+        "unit": "count"
+      },
+      "decision_action": ["block_deploy", "rollback"],
+      "cost_class": "near_zero",
+      "run_cadence": "per_pr",
+      "retirement_condition": "Retire only when the permission-before-retrieval constraint is formally removed.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    },
+    {
+      "metric_id": "guardrail.cross_version_contamination_count",
+      "role": "guardrail",
+      "question": "How many non-comparison trials mixed evidence from incompatible document versions?",
+      "source": {
+        "kind": "hard_constraint",
+        "ref": "specs/00-prd.md#7-success-metrics"
+      },
+      "owner": "retrieval-owner",
+      "grader_id": "cross_version_contamination_count",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "aggregate.cross_version_contamination_count",
+      "threshold_or_budget": {
+        "mode": "gate",
+        "operator": "eq",
+        "value": 0.0,
+        "unit": "count"
+      },
+      "decision_action": ["block_deploy", "rollback"],
+      "cost_class": "near_zero",
+      "run_cadence": "per_pr",
+      "retirement_condition": "Retire only when the document-version isolation constraint is formally removed.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    },
+    {
+      "metric_id": "operational.end_to_end_latency_p95",
+      "role": "operational",
+      "question": "What is the P95 end-to-end latency for the fixed evaluation profile?",
+      "source": {
+        "kind": "product_goal",
+        "ref": "specs/70-quality-and-evaluation.md#43-performance"
+      },
+      "owner": "runtime-owner",
+      "grader_id": "end_to_end_latency_p95",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "latency.latency_ms.p95",
+      "threshold_or_budget": {
+        "mode": "baseline_only",
+        "unit": "milliseconds"
+      },
+      "decision_action": ["capacity_review", "open_investigation"],
+      "cost_class": "near_zero",
+      "run_cadence": "release",
+      "retirement_condition": "Review after 90 days without informing a latency or capacity decision.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    },
+    {
+      "metric_id": "operational.cost_per_request",
+      "role": "operational",
+      "question": "What observed or provider-profile estimate is spent per evaluated request?",
+      "source": {
+        "kind": "product_goal",
+        "ref": "specs/70-quality-and-evaluation.md#43-performance"
+      },
+      "owner": "runtime-owner",
+      "grader_id": "cost_per_request",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "operational.cost_per_request",
+      "threshold_or_budget": {
+        "mode": "baseline_only",
+        "unit": "usd_per_request"
+      },
+      "decision_action": ["capacity_review", "open_investigation"],
+      "cost_class": "near_zero",
+      "run_cadence": "release",
+      "retirement_condition": "Review after 90 days without informing a provider or cost decision.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    },
+    {
+      "metric_id": "operational.completed_requests_per_hour",
+      "role": "operational",
+      "question": "How many requests complete per hour for the fixed sequential evaluation profile?",
+      "source": {
+        "kind": "product_goal",
+        "ref": "specs/70-quality-and-evaluation.md#43-performance"
+      },
+      "owner": "runtime-owner",
+      "grader_id": "completed_requests_per_hour",
+      "grader_version": "1",
+      "grader_layer": "L1_programmatic",
+      "dataset_segment": "rag_core",
+      "measurement": "operational.completed_requests_per_hour",
+      "threshold_or_budget": {
+        "mode": "baseline_only",
+        "unit": "requests_per_hour"
+      },
+      "decision_action": ["capacity_review", "open_investigation"],
+      "cost_class": "near_zero",
+      "run_cadence": "release",
+      "retirement_condition": "Review after 90 days without informing a throughput or capacity decision.",
+      "status": "active",
+      "introduced_at": "2026-08-21",
+      "last_reviewed_at": "2026-08-21"
+    }
+  ]
+}

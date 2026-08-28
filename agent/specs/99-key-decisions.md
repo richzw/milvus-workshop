@@ -1,6 +1,6 @@
 # 99 — Key Decisions
 
-Status: draft · Last updated: 2026-07-28
+Status: draft · Last updated: 2026-08-27
 
 新增决策时追加新的 D-id；若推翻既有决策，新增 superseding entry，不覆盖原理由。
 
@@ -59,7 +59,7 @@ Status: draft · Last updated: 2026-07-28
 - **Alternatives considered**: 只显示文档标题；自由文本 URL；稳定 chunk id + page/section。
 - **Decision**: citation 必须绑定 `chunk_id` 与 `doc_version`，PDF 带 `page_no`，其他文档可带 `section`。
 - **Why**: 比文档级引用更可核查，并能用 fixture 自动验证。
-- **Pinned by**: [`10-data-model.md § Invariants`](./10-data-model.md#32-invariants), [`12-agent-workflow.md § generate_answer`](./12-agent-workflow.md#59-generate_answer)
+- **Pinned by**: [`10-data-model.md § Invariants`](./10-data-model.md#32-invariants), [`12-agent-workflow.md § generate_candidate_answer`](./12-agent-workflow.md#59-generate_candidate_answer)
 - **Date**: 2026-07-22
 
 ## D7 — Primary reranker has a deterministic fallback
@@ -109,7 +109,7 @@ Status: draft · Last updated: 2026-07-28
 - **Alternatives considered**: OpenAI 为硬依赖并直接流式输出；通用多厂商兼容层；OpenAI 主实现 + citation guard + deterministic fallback。
 - **Decision**: 使用可注入 answer-generator interface；OpenAI Responses 是首个主实现，输出完整验证后再发给调用方，配置缺失或 provider/validation 失败时显式降级。
 - **Why**: 把模型供应商限制在一个 seam，保持默认测试和现场演示可恢复，同时确保模型不能越过 selected-context citation 合同。
-- **Pinned by**: [`13-llm-answer-generation.md`](./13-llm-answer-generation.md), [`12-agent-workflow.md § generate_answer`](./12-agent-workflow.md#59-generate_answer), [`70-quality-and-evaluation.md § Correctness gates`](./70-quality-and-evaluation.md#41-correctness-gates)
+- **Pinned by**: [`13-llm-answer-generation.md`](./13-llm-answer-generation.md), [`12-agent-workflow.md § generate_candidate_answer`](./12-agent-workflow.md#59-generate_candidate_answer), [`70-quality-and-evaluation.md § Correctness gates`](./70-quality-and-evaluation.md#41-correctness-gates)
 - **Date**: 2026-07-22
 
 ## D12 — OpenAI text embedding preserves the existing vector contract
@@ -163,7 +163,7 @@ Status: draft · Last updated: 2026-07-28
 - **Alternatives considered**: expose provider tokens immediately; keep all output terminal-only; stream sanitized stage/tool events while retaining validated-buffered answer release.
 - **Decision**: local and LangGraph runtimes expose one ordered event contract. Sanitized operational trace events stream as nodes complete; grounded answer text remains hidden until provider citation validation and workflow self-check succeed, then bounded answer deltas and one final snapshot are emitted.
 - **Why**: users see useful Agent progress without exposing chain-of-thought or unvalidated model output, and the terminal response remains authoritative and replayable.
-- **Pinned by**: [`12-agent-workflow.md § Streaming event contract`](./12-agent-workflow.md#31-streaming-event-contract), [`13-llm-answer-generation.md § Prompt and output contract`](./13-llm-answer-generation.md#5-prompt-and-output-contract), [`20-ui-demo.md`](./20-ui-demo.md)
+- **Pinned by**: [`12-agent-workflow.md § Streaming event contract`](./12-agent-workflow.md#32-streaming-event-contract), [`13-llm-answer-generation.md § Prompt and output contract`](./13-llm-answer-generation.md#5-prompt-and-output-contract), [`20-ui-demo.md`](./20-ui-demo.md)
 - **Date**: 2026-07-27
 
 ## D18 — Conversation Memory is session-scoped supplementary context
@@ -272,7 +272,7 @@ Status: draft · Last updated: 2026-07-28
   configurations while still penalizing fragmented evidence and excessive
   overlap duplicates.
 - **Pinned by**: [`11-ingestion.md § Chunking and identity`](./11-ingestion.md#4-chunking-and-identity),
-  [`70-quality-and-evaluation.md § Min-Max Chunking experiment`](./70-quality-and-evaluation.md#5-min-max-chunking-experiment)
+  [`70-quality-and-evaluation.md § Chunk configuration evaluation`](./70-quality-and-evaluation.md#5-chunk-configuration-evaluation)
 - **Date**: 2026-07-29
 
 ## D26 — Memory LLM selection is a narrow, rule-owned override
@@ -295,7 +295,7 @@ Status: draft · Last updated: 2026-07-28
   becoming a general-purpose fact extractor, leaking Memory into prompts or
   weakening deterministic safety rules.
 - **Pinned by**: [`10d-selective-agent-memory.md § Episode capture and Selection Gate`](./10d-selective-agent-memory.md#5-episode-capture-and-selection-gate),
-  [`70-quality-and-evaluation.md § Correctness`](./70-quality-and-evaluation.md#2-correctness)
+  [`70-quality-and-evaluation.md § Correctness`](./70-quality-and-evaluation.md#41-correctness-gates)
 - **Date**: 2026-07-29
 
 ## D27 — Native Milvus decay is probe-gated and owns only time weighting
@@ -534,7 +534,7 @@ Status: draft · Last updated: 2026-07-28
 ## D38 — Hybrid facets use bounded Query Aggregation
 
 - **Context**: Milvus Search Aggregation 不能与 Hybrid Search 组合，而 UI facet 语义是 retained candidate pool，不是全 collection。
-- **Decision**: hybrid recall 后以候选 `chunk_id` 做 bounded filter，通过一个 Query Aggregation 生成组合 groups，再 marginalize 为现有 per-field counts；local adapter 对同一集合直接计数。
+- **Decision**: hybrid recall 后以候选 `chunk_id` 做 bounded filter；Milvus 支持的 VarChar 字段通过 Query Aggregation 生成组合 groups，再 marginalize 为现有 per-field counts。Milvus 3.0 不支持 Bool group-by，`has_image_vector` 与 `is_current` 从同一已授权、去重、最多 64 条的 retained candidates 精确计数；local adapter 对同一集合直接计数。
 - **Pinned by**: [`14-milvus-3-native-capabilities.md § Facets / aggregation`](./14-milvus-3-native-capabilities.md#22-facets--aggregation)
 - **Date**: 2026-07-31
 
@@ -565,3 +565,165 @@ Status: draft · Last updated: 2026-07-28
 - **Decision**: 只支持新增 nullable sparse/embedding input/output 字段、BM25 physical backfill 与 bounded partial update；禁止 drop/rename/type change，默认 dry-run，apply 后 describe revalidation，失败只输出 registered code。
 - **Pinned by**: [`14-milvus-3-native-capabilities.md § Schema evolution and backfill`](./14-milvus-3-native-capabilities.md#6-schema-evolution-and-backfill)
 - **Date**: 2026-07-31
+
+## D43 — Evaluation follows eval-driven development with layered, calibrated graders
+
+- **Context**: 现有 eval 是确定性 programmatic runner 加 golden fixture；随 live LLM provider（classifier/reranker/generator）可选启用，需要决定如何扩展评测而不制造虚假信心。通用 metric library（BLEU/ROUGE/generic helpfulness）和单一“总分” judge 都会在漏掉真实失败模式的同时打出好看的分数。
+- **Alternatives considered**: 引入通用 RAG metric library；单一 LLM judge 输出 overall quality 分数；每个维度独立 grader 并分层校准。
+- **Decision**: 采用 eval-driven development：gate 先于实现定义，维度只从观察到的失败模式派生，每个维度绑定唯一 grader。Grader 分三层——L1 deterministic programmatic（唯一默认 gating 层）、L2 单维度 LLM-as-judge（书面 rubric，与 ≥50 条含失败样例的人工标注达到高 80%–90% 经 chance 修正的一致率后才可 gate）、L3 human（ground truth 与仲裁）。Agent 运行按 trajectory/tool/outcome 三层归因；启用 live provider 后每题跑 k ≥ 3 trial 并同时报告 pass@k 与 pass^k，gate 以 pass^k 为准。每个新观察到的失败在修复它的同一变更内成为 fixture；饱和 case 升级但保留在回归集。
+- **Why**: 未校准的 judge 比没有 judge 更糟；单 trial 分数掩盖 agent 的不稳定性；混合总分无法回答“哪个维度回归了”。分层让便宜的确定性检查过滤大部分回归，昂贵的人工只花在校准和仲裁上。
+- **Pinned by**: [`70-quality-and-evaluation.md § 2a Eval-driven development loop`](./70-quality-and-evaluation.md#2a-eval-driven-development-loop), [`70-quality-and-evaluation.md § 4.0b Grader layers and evaluator budget`](./70-quality-and-evaluation.md#40b-grader-layers-and-evaluator-budget), [`70-quality-and-evaluation.md § 4.5 Reliability`](./70-quality-and-evaluation.md#45-reliability-passk-and-passk), [`91-impl-plan.md § Phase 5`](./91-impl-plan.md#8-phase-5--evaluation-rehearsal-and-optional-labs)
+- **Date**: 2026-08-05
+
+## D44 — Chunk configuration is selected by isolated end-to-end evaluation
+
+- **Context**: D25 established deterministic Min-Max boundaries and stable
+  retrieval anchors, but the current two-config runner ranks only retrieval
+  recall and duplicate/chunk-count proxies. It cannot prove that the selected
+  size produces the most faithful and relevant final answers.
+- **Alternatives considered**: choose one chunk size by convention; compare
+  character windows only; keep retrieval-only metrics; rebuild an isolated
+  index and run the complete RAG path for every candidate configuration.
+- **Decision**: compare at least three small/medium/large token-based Min-Max
+  profiles, initially around 128/256/512 maximum lexical tokens, with all other
+  variables fixed. Each profile owns a separate chunk set/index and reports
+  retrieval, selected context, citation, required facts, independently graded
+  faithfulness/relevancy, latency, token/cost and corpus-shape dimensions. A
+  constraint-first Pareto policy produces a reviewed recommendation artifact;
+  the runner never mutates ingestion defaults.
+- **Supersedes**: D25 only for the minimum configuration count and
+  retrieval-only recommendation policy. D25's tokenizer, hard boundaries and
+  stable-anchor identity contract remain in force.
+- **Why**: chunk size changes both retrieval granularity and what the generator
+  can faithfully use. Isolated end-to-end evaluation avoids mixed-index
+  leakage and replaces intuition with reproducible evidence without hiding
+  trade-offs in one blended score.
+- **Pinned by**: [`11-ingestion.md § Chunking and identity`](./11-ingestion.md#4-chunking-and-identity), [`70-quality-and-evaluation.md § Chunk configuration evaluation`](./70-quality-and-evaluation.md#5-chunk-configuration-evaluation), [`91-impl-plan.md § Phase 0`](./91-impl-plan.md#3-phase-0--risk-retirement)
+- **Date**: 2026-08-20
+
+## D45 — Query transformation is bounded and scope-preserving
+
+- **Context**: the workflow already rewrites and decomposes queries, but it has
+  no explicit strategy contract for identity or step-back retrieval. A free
+  LLM transformer could add tools, drop named versions/negation or multiply
+  latency through recursive transformations.
+- **Alternatives considered**: always search the original query; always rewrite;
+  allow free multi-query generation; select one closed strategy and validate
+  all derived items against the authorized plan.
+- **Decision**: `plan_retrieval` chooses exactly one primary strategy from
+  `identity|rewrite|step_back|decompose`, with at most three executable items.
+  Derived queries inherit permission, registered tools, entities, version
+  scope and protected product/feature/version/negation terms. Step-back always
+  retains a primary query and background evidence cannot alone satisfy a
+  concrete aspect. Optional model output is strict, called at most once per
+  planning invocation and falls back to a deterministic plan.
+- **Why**: rewrite improves noisy phrasing, decomposition covers complex
+  questions and step-back supplies useful background, while one bounded policy
+  preserves termination, authorization and trace attribution.
+- **Pinned by**: [`12-agent-workflow.md § plan_retrieval`](./12-agent-workflow.md#53-plan_retrieval), [`70-quality-and-evaluation.md § Correctness gates`](./70-quality-and-evaluation.md#41-correctness-gates), [`90-roadmap.md § M1`](./90-roadmap.md#m1--explainable-agentic-rag)
+- **Date**: 2026-08-20
+
+## D46 — Context compression is a provenance-preserving generation projection
+
+- **Context**: sending all selected chunk text to the answer model can waste
+  tokens and add noise, but model summaries can omit qualifiers or invent
+  details. Compressing before evidence grading would also let a lossy step
+  alter the sufficiency decision.
+- **Alternatives considered**: never compress; summarize every retrieved chunk
+  before rerank/grade; let the model replace evidence with free summaries;
+  compress only selected sufficient context and retain exact source support.
+- **Decision**: an optional `prepare_generation_context` stage runs only after
+  evidence is sufficient. Selective mode uses verified verbatim spans;
+  summary/extraction proposals may select exact support spans, but their
+  derived wording is discarded before answer generation. Compression never changes selected source ids, evidence grade,
+  permission/version scope or citation map. One bounded batch call is allowed;
+  any provider/provenance/coverage failure atomically restores the complete
+  original selected context.
+- **Why**: the generator receives less irrelevant text without allowing a
+  lossy model step to become a new knowledge source. Whole-query fallback keeps
+  the current grounded path reliable and makes compression quality separately
+  measurable.
+- **Pinned by**: [`12-agent-workflow.md § prepare_generation_context`](./12-agent-workflow.md#58-prepare_generation_context), [`13-llm-answer-generation.md`](./13-llm-answer-generation.md), [`70-quality-and-evaluation.md § Correctness gates`](./70-quality-and-evaluation.md#41-correctness-gates)
+- **Date**: 2026-08-20
+
+## D47 — Active eval metrics form a minimal, decision-bound portfolio
+
+- **Context**: D43 established layered graders、failure-driven dimensions、agent attribution and reliability reporting, but it did not distinguish permanent KPIs from feature diagnostics, product hard constraints or free operational trace fields. As the runner accumulated dimensions, every new field risked becoming another evaluator/dataset/baseline to maintain even when no decision depended on it.
+- **Alternatives considered**: keep every available report field as a metric; start from a generic hallucination/helpfulness/toxicity catalog; keep a reviewed minimum split across goal/guardrail/operational roles with explicit admission and retirement.
+- **Decision**: the active set is a versioned `eval-metric-registry-v1` portfolio containing all three roles. Candidates come from observed failure clusters or explicit product goals/hard constraints. A candidate becomes active only with one question, one grader, owner, dataset segment, threshold/budget, decision action, evaluator cost/cadence and retirement rule. Bootstrap error analysis reads 30–50 representative traces using only `overall_pass` and `review_note` before clustering boolean failure categories. Simple prompt/schema omissions get fixed and tested without a permanent metric. Non-guardrails that remain uninformative for roughly three months retire from the dashboard while useful regression fixtures remain; guardrails persist until their constraint is formally removed. `rag-eval-v3` embeds the registry checksum and separates the goal/guardrail/operational decision surface from trajectory/tool/outcome diagnostics.
+- **Supersedes**: D43 only where D43 says dimensions come exclusively from observed failures and implies saturated cases should always remain active metrics. D43's layered grader calibration、trajectory/tool/outcome attribution、failure-to-fixture rule and `pass^k` reliability contract remain in force.
+- **Why**: a metric has ongoing evaluator、dataset、review and cognitive cost. Binding each one to an action keeps the set small enough to maintain, preserves day-one safety constraints, and prevents cheap-to-collect diagnostics or ambiguous proxies from driving releases.
+- **Pinned by**: [`00-prd.md § Goals`](./00-prd.md#3-goals), [`70-quality-and-evaluation.md § Eval-driven development loop`](./70-quality-and-evaluation.md#2a-eval-driven-development-loop), [`70-quality-and-evaluation.md § Metric portfolio contract`](./70-quality-and-evaluation.md#40-metric-portfolio-contract), [`70-quality-and-evaluation.md § Error-analysis and metric-review artifacts`](./70-quality-and-evaluation.md#47-error-analysis-and-metric-review-artifacts), [`90-roadmap.md § M2`](./90-roadmap.md#m2--build-and-evaluate-the-corpus), [`91-impl-plan.md § Phase 5`](./91-impl-plan.md#8-phase-5--evaluation-rehearsal-and-optional-labs)
+- **Date**: 2026-08-21
+
+## D48 — StructArray is a derived document projection; chunk identity remains authoritative
+
+- **Context**: Milvus 3.0 StructArray can keep a document's passages, scalar metadata and vectors under one parent entity. The current RAG already relies on flat `kb_chunks` for BM25 Function output, independent chunk version/checksum validation, exhaustive sibling lookup and stable citations. Current StructArray subfields do not support sparse vectors, Text/TIMESTAMPTZ/JSON subfields or field functions, and other collections need independent lifecycle mutation.
+- **Alternatives considered**: replace `kb_chunks` with one document row; keep only flat chunk rows; maintain a rebuildable `kb_documents` StructArray projection alongside the citation-authoritative flat collection; migrate Memory/cache/dedup records into parent arrays.
+- **Decision**: add `kb_documents`, one parent per `(doc_id, doc_version)` with ordered `passages`, as an all-or-nothing retrieval projection built from validated `kb_chunks`. Every passage carries stable `chunk_id/checksum/provenance` and two copies of the same dense vector for distinct search modes; passage text is rehydrated from `kb_chunks`, which continues to own BM25, source content and citation validation. Offset is query-local execution provenance, never a cache/eval/citation id. Memory, grounded cache and dedup stay flat because their independent TTL/revision/delete/function semantics do not fit StructArray.
+- **Why**: the design demonstrates parent/child-aware retrieval without weakening existing lexical search, version isolation or source verifiability. Projection bijection makes rollback trivial and prevents two competing evidence authorities.
+- **Pinned by**: [`10-data-model.md § kb_documents`](./10-data-model.md#3a-kb_documents--structarray-document-retrieval-projection), [`11-ingestion.md § StructArray projection assembly`](./11-ingestion.md#4a-structarray-projection-assembly), [`70-quality-and-evaluation.md § StructArray retrieval evaluation`](./70-quality-and-evaluation.md#42c-structarray-retrieval-evaluation), [`91-impl-plan.md § Phase 9`](./91-impl-plan.md#12-phase-9--structarray-documentpassage-retrieval)
+- **Source**: [Milvus 3.0 StructArray design](https://milvus.io/blog/milvus-3-0-structarray.md), [official limits](https://milvus.io/docs/structarray-limits.md)
+- **Date**: 2026-08-24
+
+## D49 — Search granularity is explicit and entity hits are not citation evidence
+
+- **Context**: StructArray offers element-level ANN, entity-level EmbeddingList/MaxSim, same-element filters and hybrid collapse. These modes return different identities. A mixed-granularity hybrid may collapse element hits to a parent and lose the selected offset; collapse also sees only the element hits admitted by the sub-search limit.
+- **Alternatives considered**: expose every mode as interchangeable search results; always collapse to document; use only element search; use EmbeddingList for document routing and element search for evidence under an explicit profile contract.
+- **Decision**: `struct_element` turns one query vector into citeable passage candidates after offset-to-`chunk_id` validation. `struct_two_stage` uses 2–3 same-scope aspect vectors as an EmbeddingList parent shortlist, then requires element resolution for every evidence aspect. `struct_fused` combines flat BM25 and StructArray dense elements application-side by `chunk_id`; it does not use a mixed-granularity native hybrid call for citation production. EmbeddingList and element modes use separate vector subfields/indexes. TokenANN with MaxSim reranking is the quality-first baseline; MUVERA requires a measured budget violation, and LEMUR remains out of scope.
+- **Why**: the result identity becomes reviewable at every stage, MaxSim can improve multi-aspect document routing, and the answer path still ends on the smallest source unit a user can verify. Explicit profiles also make quality/storage/latency comparisons honest.
+- **Pinned by**: [`12-agent-workflow.md § Tool catalog`](./12-agent-workflow.md#4-tool-catalog), [`14-milvus-3-native-capabilities.md § StructArray`](./14-milvus-3-native-capabilities.md#25-structarray-search-and-filter-contract), [`20-ui-demo.md § Evidence`](./20-ui-demo.md#42-evidence), [`70-quality-and-evaluation.md § StructArray retrieval evaluation`](./70-quality-and-evaluation.md#42c-structarray-retrieval-evaluation)
+- **Source**: [Milvus EmbeddingList strategy guide](https://milvus.io/docs/choose-an-embeddinglist-search-strategy.md), [Milvus hybrid search with StructArray](https://milvus.io/docs/hybrid-search-with-structarray.md)
+- **Date**: 2026-08-24
+
+## D50 — Retrieval complexity is a measured ladder, not a default
+
+- **Context**: the demo runs pre-embedded dense + BM25 hybrid retrieval from the first phase, which also imports the entire chunking cost surface (size, overlap, boundary policy, re-ingest on model change). Nothing in the specs recorded what the cheaper rungs are, when a rung is justified, or what the hybrid lane adds over lexical-only retrieval on this corpus. A workshop participant copying the architecture had no way to see that a static synthetic corpus with keyword-shaped queries does not, on its own inputs, require it.
+- **Alternatives considered**: leave hybrid as the implicit default and document nothing; demote the demo to lexical-only to match its corpus properties; keep hybrid as the teaching default but record the ladder, the selection inputs and a permanent lexical-only comparison arm.
+- **Decision**: adopt the T0–T5 ladder in [`15-retrieval-tier-selection.md`](./15-retrieval-tier-selection.md). Tier selection reads five measured inputs (freshness, corpus churn, query patterns, scale/latency, team capability). T2 hybrid stays the demo default because the workshop's subject is Milvus 3.0 retrieval, and that motive is stated as a teaching choice rather than an engineering conclusion. Escalation between tiers requires a recorded failure mode plus a comparative report on the same golden set, and every comparative retrieval report keeps a `lexical_only` arm.
+- **Why**: the incremental value of the dense lane stays visible instead of assumed, chunking and re-ingest costs are attributed to the tier that introduces them, and the workshop teaches the selection reasoning alongside the capability. It also matches the existing repo pattern where a retrieval-architecture change (StructArray, D48/D49) must earn its default through isolated evaluation.
+- **Pinned by**: [`15-retrieval-tier-selection.md § The tier ladder`](./15-retrieval-tier-selection.md#3-the-tier-ladder), [`70-quality-and-evaluation.md § Retrieval tier comparison`](./70-quality-and-evaluation.md#42d-retrieval-tier-comparison)
+- **Source**: Rafael Pierre, ["RAG Is Simpler Than You Think"](https://www.lighthousenewsletter.com/p/rag-is-simpler-than-you-think), 2026-06-10
+- **Date**: 2026-08-27
+
+## D51 — Embedding-model migration is planned and fingerprint-gated
+
+- **Context**: embeddings are fixed at 1024 dimensions and providers cannot be mixed inside one collection, so a model change or deprecation is a full corpus re-ingest with a rebuild window. The specs stated the constraint but never its cost, and never the mitigations that exist one rung down the ladder (on-the-fly embedding, hot/cold tiers).
+- **Alternatives considered**: treat re-ingest as an operational detail outside the specs; allow a mixed vector space during a rolling migration; require an explicit migration plan and keep the fingerprint as a hard startup gate.
+- **Decision**: any provider or model change carries a migration plan naming the target model, corpus size, estimated re-embed cost from the § 6 model, and the rebuild window. The embedding fingerprint recorded in chunk metadata remains a hard startup gate: a mismatch fails startup and never silently serves two vector spaces. T3 (on-the-fly) and T4 (hot/cold) are documented as unimplemented exits for corpora where this cost is unacceptable; they may not be cited as available behaviour.
+- **Why**: the migration cost is a direct consequence of choosing T2 and belongs next to that choice. A hard fingerprint gate keeps the cost visible at deploy time rather than latent in silently degraded recall.
+- **Pinned by**: [`15-retrieval-tier-selection.md § Embedding-model lifecycle`](./15-retrieval-tier-selection.md#7-embedding-model-lifecycle), [`10a-openai-text-embedding.md § Minimal-change boundary`](./10a-openai-text-embedding.md#6-minimal-change-boundary), [`14-milvus-3-native-capabilities.md § Schema evolution and backfill`](./14-milvus-3-native-capabilities.md#6-schema-evolution-and-backfill)
+- **Supersedes**: nothing; extends [`§ D12`](#d12--openai-text-embedding-preserves-the-existing-vector-contract)
+- **Date**: 2026-08-27
+
+## D52 — Sub-query tier routing is planner-owned and eval-gated
+
+- **Context**: `decompose` produces two or three plan items, and every item executes the same registered retrieval profile. An aspect that is an exact product or feature name pays full dense retrieval cost even though lexical retrieval would resolve it, and the decomposed query's cost is the sum of its items.
+- **Alternatives considered**: keep uniform routing; let the transformer model name a retrieval tier per sub-query; let the deterministic planner annotate each plan item with the cheapest sufficient tier.
+- **Decision**: record per-item tier routing as a proposed extension owned by the deterministic planner policy, never by the model — the same boundary D49 already draws for retrieval profiles. Tier annotation cannot widen permission, tool allow-list or version scope, cannot alter `candidate_pool_fingerprint` semantics, and mixed-tier candidates merge on `chunk_id` carrying their tier in trace provenance. Adoption requires a comparative report showing no quality regression against uniform routing.
+- **Why**: cost follows the aspect that actually needs semantic matching, and parallel execution makes a decomposed query's latency the maximum of its items rather than their sum — without giving an LLM control over retrieval mechanics.
+- **Pinned by**: [`15-retrieval-tier-selection.md § Sub-query tier routing`](./15-retrieval-tier-selection.md#8-sub-query-tier-routing-proposed-eval-gated), [`12-agent-workflow.md § plan_retrieval`](./12-agent-workflow.md#53-plan_retrieval)
+- **Source**: Rafael Pierre, ["RAG Is Simpler Than You Think"](https://www.lighthousenewsletter.com/p/rag-is-simpler-than-you-think), 2026-06-10
+- **Date**: 2026-08-27
+
+## D53 — Model-only verification stays at the contract layer, not the golden set
+
+- **Context**: `70 § 3` listed a selective-compression success case and a malformed-output atomic-fallback case among the golden fixtures. Neither is producible offline: no deterministic compressing implementation exists, and `CONTEXT_COMPRESSION_MODE=selective` fails startup without credentials. The same holds for the `retry_exhausted` and `duplicate_retry_query` terminal paths, which need controlled retrieval rounds rather than a corpus a question can hit.
+- **Alternatives considered**: put a fake OpenAI client behind `run_eval.py` so the offline run can synthesise a compression projection; build a deterministic extractive compressor so the behaviour becomes reachable without a model; keep the behaviour verified where it already is and shorten the golden fixture list.
+- **Decision**: a behaviour that only a live provider or an artificially controlled dependency can produce is verified by fake-client contract tests under `§ 6`, not by a golden fixture. `§ 3`'s minimum set drops the compression pair and the two controlled retry terminations, and states which layer owns them. `no_progress` stays in the golden set because the seeded corpus produces it naturally.
+- **Why**: `§ 4.6` makes the offline golden run deterministic and network-free, so a fake client inside the CLI would let the report claim a model-produced projection that no model produced — the same dishonesty the spec forbids for latency SLAs and fallback paths. The behaviours lose no coverage: they move to the layer `§ 6` already assigns to model-backed paths, and keep the golden-fixture retirement rule that a behaviour change must update them in the same commit.
+- **Consequence**: adding a deterministic extractive compressor would make the compression pair reachable and is the recorded route to reversing this; it is a product change, not an eval change.
+- **Pinned by**: [`70-quality-and-evaluation.md § Golden dataset contract`](./70-quality-and-evaluation.md#3-golden-dataset-contract), [`70-quality-and-evaluation.md § External capability verification matrix`](./70-quality-and-evaluation.md#6-external-capability-verification-matrix)
+- **Supersedes**: the compression and controlled-retry entries of the `§ 3` minimum fixture set
+- **Date**: 2026-08-27
+
+## D54 — The single-strong-chunk gate is declared per reranker
+
+- **Context**: `12 § 5.7` required "rerank score at least `0.80`" without naming the scorer, and one module constant was applied to every implementation. `RuleBasedReranker` returns `0.6·hybrid + 0.2·overlap + 0.1·recency + 0.1·priority`, where a naturally phrased question always carries tokens absent from the corpus and caps `overlap`; a model reranker returns an assigned relevance where a direct section match scores ~0.95. D36 records `0.99` for its motivating `Milvus 3.0 Force Merge` example, which is the model scale, and the path's only coverage injects `SectionScoreReranker(section_scores={"Force Merge": 0.95})`.
+- **Measured**: across all 16 golden questions the deterministic reranker's maximum is `0.7579`; `0.80` is reached only by a keyword-only query (`Milvus 3.0 Force Merge` = `0.8008`) or verbatim chunk text (`0.8683`). Separately, the exception requires exactly one relevant chunk: 13 questions yield two or more, one yields none, and the only single-relevant case (`q013`) fails the section-name-in-query condition. **No threshold value changes any golden outcome on this corpus.**
+- **Alternatives considered**: lower the shared constant until the deterministic path becomes reachable; normalise the rule reranker's composite onto the model scale; declare the threshold per implementation and leave both values at `0.80`.
+- **Decision**: `Reranker` declares `strong_single_evidence_threshold`, and the workflow reads it from whichever reranker actually ranked. Both shipped implementations keep `0.80`. A reranker exposing no finite value in `[0, 1]` fails closed rather than silently inheriting a default.
+- **Why**: the defect is the comparison, not the number. Sharing one constant across two incompatible scales is latent — a reranker returning distances or a `0..100` range would silently misgrade — while the measurement gives no evidence for a different value, and lowering one to make a dead path reachable would be tuning a threshold to change an outcome, which `70 § 4.2` forbids. That the path is unreachable under the deterministic default is now a recorded property rather than an accident.
+- **Pinned by**: [`12-agent-workflow.md § evaluate_evidence`](./12-agent-workflow.md#57-evaluate_evidence), [`70-quality-and-evaluation.md § Correctness gates`](./70-quality-and-evaluation.md#41-correctness-gates)
+- **Supersedes**: nothing; refines [`§ D36`](#d36--atomic-focused-answers-may-use-one-strong-direct-citation)
+- **Date**: 2026-08-27

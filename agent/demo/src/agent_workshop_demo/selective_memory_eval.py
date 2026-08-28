@@ -141,7 +141,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         else LocalSelectiveMemoryStore()
     )
     service = SelectiveMemoryService(store)
-    turns = {
+    scenario_turns: dict[str, list[tuple[str, str, str | None]]] = {
         "explicit_preference": [("q1", "请记住以后用中文", "以后用中文")],
         "ordinary_turn": [("q1", "今天天气不错", None)],
         "correction": [
@@ -154,7 +154,8 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         ],
         "replay": [("q1", "请记住以后用中文", "以后用中文")],
         "stale_filter": [("q1", "请记住以后用中文", "以后用中文")],
-    }[scenario]
+    }
+    turns = scenario_turns[scenario]
     results = []
     for index, (query_id, query, remembered) in enumerate(turns, 1):
         results.append(

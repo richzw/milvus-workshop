@@ -11,9 +11,11 @@ from typing import Any, Final
 DEMO_ROOT: Final = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_FILE: Final = DEMO_ROOT / ".env"
 ENV_KEY_PATTERN: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SKIP_ENV_FILE_VAR: Final = "AGENT_WORKSHOP_SKIP_ENV_FILE"
 
 COLLECTION_NAMES: Final = {
     "kb_chunks": "kb_chunks",
+    "kb_documents": "kb_documents",
     "conversation_memory": "conversation_memory",
     "memory_events": "memory_events",
     "memory_facts": "memory_facts",
@@ -29,6 +31,14 @@ VECTOR_DIMS: Final = {
 }
 
 TIME_UNIT: Final = "epoch_milliseconds"
+
+MAX_EXHAUSTIVE_CONTEXTS: Final = 16
+"""Generation-context cap for an exhaustive document query (spec 12 § 5.9).
+
+Focused questions use ``DEFAULT_SEARCH_PARAMS["answer_context_top_k"]``; both
+the workflow and the offline evaluator must read the bound from here so the
+two-branch contract cannot drift apart.
+"""
 
 DEFAULT_SEARCH_PARAMS: Final[dict[str, Any]] = {
     "max_retry": 3,
@@ -54,11 +64,14 @@ def load_demo_env(
 ) -> Path | None:
     """Load ``demo/.env`` without replacing explicit process variables."""
 
+    target = os.environ if environ is None else environ
+    if path is None and target.get(SKIP_ENV_FILE_VAR) == "1":
+        return None
+
     env_path = DEFAULT_ENV_FILE if path is None else path
     if not env_path.is_file():
         return None
 
-    target = os.environ if environ is None else environ
     for line_number, raw_line in enumerate(
         env_path.read_text(encoding="utf-8").splitlines(),
         start=1,

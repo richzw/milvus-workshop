@@ -22,10 +22,12 @@ The runnable Python demo lives under `demo/`. Useful local checks are:
 - `rg --files`: list tracked workshop files quickly.
 - `git diff -- *.md`: review Markdown-only changes before commit.
 - `open readme.md`: preview the main document in the default macOS app.
-- `PYTHONPATH=demo/src python3 -m unittest discover demo/tests -v`: run the deterministic test suite.
+- `PYTHONPATH=demo/src python3 -m unittest discover -t demo -s demo/tests -v`: run the deterministic test suite.
+  The `-t demo` root is required; it lets `demo/tests/__init__.py` clear `demo/.env` and every provider selector first.
 - `PYTHONPATH=demo/src python3 demo/scripts/run_eval.py`: run the golden-question retrieval/citation evaluation.
+- `PYTHONPATH=demo/src python3 demo/scripts/run_tier_eval.py`: compare the T0/T1/T2 retrieval tier arms.
 - `ruff check demo/src demo/scripts demo/tests`: run the available Python lint checks.
-- `mypy --strict demo/src demo/tests demo/scripts`: run strict type checks once optional dependencies are installed.
+- `mypy demo/src demo/scripts demo/tests`: run strict type checks once optional dependencies are installed (settings live in `mypy.ini`).
 
 Install optional UI, API, LangGraph, and pymilvus dependencies with `pip install -r demo/requirements.txt`; the core fallback and unit tests require only Python.
 

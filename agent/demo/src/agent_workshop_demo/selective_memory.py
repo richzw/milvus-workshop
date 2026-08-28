@@ -288,9 +288,9 @@ def decay_score(profile: DecayProfile, *, timestamp_ms: int, now_ms: int) -> flo
         return 1.0
     ratio = adjusted / profile.scale_ms
     if profile.function == "exp":
-        return profile.decay**ratio
+        return float(profile.decay**ratio)
     if profile.function == "gauss":
-        return profile.decay ** (ratio * ratio)
+        return float(profile.decay ** (ratio * ratio))
     return max(0.0, 1.0 - ((1.0 - profile.decay) * ratio))
 
 

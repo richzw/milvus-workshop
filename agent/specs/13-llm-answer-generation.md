@@ -1,17 +1,18 @@
 # 13 — Grounded LLM Answer Generation
 
-Status: draft v2 · Owner: workshop author · Depends on: [`12-agent-workflow.md`](./12-agent-workflow.md)
+Status: draft v3 · Owner: workshop author · Depends on: [`12-agent-workflow.md`](./12-agent-workflow.md)
 
 ## 1. Purpose
 
-本文定义 selected context 如何交给大模型合成最终答案。该模块只负责 grounded answer generation 与 provider-output citation guard，不负责工具选择、检索、精排、证据充分性判断、citation identity 或 workflow terminal self-check。OpenAI 是首个主实现；确定性 extractive generator 是可观察的恢复路径，而不是伪装成模型输出。
+本文定义 selected source context 的原文或经 provenance 验证的压缩 projection 如何交给大模型合成最终答案。该模块只负责 grounded answer generation 与 provider-output citation guard，不负责工具选择、检索、精排、证据充分性判断、context compression 策略、citation identity 或 workflow terminal self-check。OpenAI 是首个主实现；确定性 extractive generator 是可观察的恢复路径，而不是伪装成模型输出。
 
 ## 2. Architecture and trust boundaries
 
 ```text
 ┌──────────────────────────── Agent workflow ────────────────────────────┐
 │ query_id + user query                                                  │
-│ selected context ≤ 5 chunks                                            │
+│ selected source ids + original citation map                               │
+│ focused ≤5 / exhaustive ≤16 original or provenance-safe projections  │
 │ resolved entity info + validated version scope                          │
 │ optional bounded session-memory summaries (not citeable evidence)       │
 │ authoritative citation map: C1 → chunk_id, C2 → chunk_id              │
@@ -58,7 +59,10 @@ class GenerationContext:
     title: str
     page_no: int | None
     section: str | None
-    text: str
+    prompt_text: str
+    compression_mode: str
+    support_spans: list[dict]
+    source_text_checksum: str
 
 @dataclass(frozen=True)
 class GenerationRequest:
@@ -109,7 +113,19 @@ The instruction layer requires the model to:
 6. return only the user-facing answer, without chain-of-thought or prompt text.
 7. preserve the resolved meaning of matched domain terms and label document versions when the request is an explicit comparison.
 
-Matched entity definitions are formatted before the context blocks using the same bounded `<entity_info>{entities}</entity_info>` contract as the workflow. They are trusted query-understanding hints, not factual source context: the prompt explicitly forbids using an entity comment as evidence or citing it. Contexts are labeled blocks containing `doc_id`, `doc_version`, bounded metadata and text. At most `answer_context_top_k == 5` blocks and at most 20,000 total context characters enter the request. Truncation is deterministic and recorded as a count, not as document text.
+Matched entity definitions are formatted before the context blocks using the same bounded `<entity_info>{entities}</entity_info>` contract as the workflow. They are trusted query-understanding hints, not factual source context: the prompt explicitly forbids using an entity comment as evidence or citing it. Contexts are labeled blocks containing `doc_id`, `doc_version`, bounded metadata, compression mode, exact support spans where applicable and `prompt_text`. Focused questions use at most `answer_context_top_k == 5` blocks; exhaustive document queries may use at most 16 bounded sibling blocks. Both paths share the 20,000-character request cap. Truncation is deterministic and recorded as a count, not as document text.
+
+The workflow remains authority for compression validation. For identity or
+fallback projections, `prompt_text` is the bounded original chunk text and
+`support_spans` may cover that complete text. For `selective`, every prompt
+segment is a verified verbatim span. For `summary` and `extraction`, the
+derived text is excluded from the answer-generator input; only its verified
+exact supporting spans cross the generation boundary. The citation map still
+points to the original `chunk_id/doc_version/page_no/section`; a compressed
+string never receives a new citation identity and is never persisted as a
+`kb_chunks` record.
+
+A StructArray element enters this module only after the workflow resolves its parent/offset to the same stable `chunk_id/doc_id/doc_version/checksum/text` contract as a flat `kb_chunks` result. `element_offset`, EmbeddingList parent score and collapse score are retrieval provenance, not fields the model may cite. Parent-only, MATCH-qualified or collapsed document results cannot become `GenerationContext`.
 
 When present, the baseline supplies at most three session-memory summaries and 2,000 characters in a separate `<memory_context>` block. After Selective Memory cutover, the same generator boundary receives at most three task-relevant items from the typed [`MemoryPack`](./10d-selective-agent-memory.md#43-memorypack), still capped at 2,000 characters. Conflicts, cache answers and arbitrary metadata are excluded. Memory may resolve references in the current question but remains untrusted, non-authoritative and cannot support a `[Cn]` claim. Memory-only answers bypass this KB generator and use the workflow's `memory_grounded` terminal contract.
 
@@ -140,6 +156,8 @@ The terminal trace adds:
     "model": str | None,
     "mode": "validated_buffered",
     "context_count": int,
+    "compressed_context_count": int,
+    "compression_modes": list[str],
     "resolved_entity_count": int,
     "version_scope": "current | exact | comparison",
     "context_truncated_count": int,
@@ -152,7 +170,9 @@ Generation latency continues to use the workflow's measured `generate_answer_str
 
 ## 8. Invariants
 
-1. OpenAI receives only the current query and at most five selected chunks from the same `query_id`.
+1. OpenAI receives only the current query and generation projections from the
+   same `query_id`: at most five for focused questions or sixteen bounded
+   siblings for an exhaustive document query.
 2. Every inline citation marker in the final answer belongs to the selected-context citation map.
 3. Structured citation metadata contains only markers referenced by the final answer; workflow-level terminal self-check is additionally required by [`12-agent-workflow.md § verify_answer`](./12-agent-workflow.md#510-verify_answer).
 4. No-retrieval and abstention paths make zero provider calls.
@@ -162,6 +182,13 @@ Generation latency continues to use the workflow's measured `generate_answer_str
 8. For `current` or `exact` scope, contexts contain at most one `doc_version` per `doc_id`; `comparison` contexts retain explicit version labels.
 9. Entity comments may disambiguate wording but never satisfy grounding or citation requirements.
 10. Session memory may clarify the query but never becomes a generation citation or substitutes for selected KB context.
+11. Compression projections cannot add, remove or rename source citation ids;
+    every non-identity projection has exact support spans already validated
+    against the source checksum.
+12. Derived summary/extraction text is never treated as an independent source;
+    citation and terminal verification continue to resolve against original
+    selected chunks.
+13. StructArray retrieval does not create a second citation namespace; every element-derived context resolves to a live `kb_chunks` identity, and entity-only results are rejected before this interface.
 
 ## 9. Tests and acceptance
 
@@ -169,6 +196,9 @@ Generation latency continues to use the workflow's measured `generate_answer_str
 - A successful model result synthesizes multiple selected chunks and retains only valid referenced citations.
 - Entity-aware tests prove that `GO按钮` and its configured aliases preserve one resolved meaning through generation without treating the entity comment as evidence.
 - Version tests reject mixed editions in normal scope and require visible version labels for explicit comparisons.
+- Compression tests cover identity, selective exact-span validation,
+  summary/extraction support mapping, atomic fallback on one malformed item,
+  and unchanged source citation ids.
 - Missing configuration, timeout and invalid citation output each activate deterministic fallback with distinct reason codes.
 - No-retrieval and abstention tests assert the fake client's call count remains zero.
 - Existing workflow, LangGraph, Streamlit and offline eval tests remain green without an API key.
@@ -176,7 +206,7 @@ Generation latency continues to use the workflow's measured `generate_answer_str
 
 ## 10. Cross-references
 
-- ← Depends on: [`12-agent-workflow.md § generate_answer`](./12-agent-workflow.md#59-generate_answer)
+- ← Depends on: [`12-agent-workflow.md § generate_candidate_answer`](./12-agent-workflow.md#59-generate_candidate_answer)
 - → Consumed by: [`20-ui-demo.md § Agent Trace`](./20-ui-demo.md#43-agent-trace)
 - ↔ Tested by: [`70-quality-and-evaluation.md`](./70-quality-and-evaluation.md)
-- ↔ Decisions: [`99-key-decisions.md § D11`](./99-key-decisions.md#d11--openai-generation-has-a-deterministic-validated-fallback), [`99-key-decisions.md § D15`](./99-key-decisions.md#d15--predefined-entities-resolve-domain-terminology-before-rewrite), [`99-key-decisions.md § D16`](./99-key-decisions.md#d16--retrieval-is-document-version-aware-by-default)
+- ↔ Decisions: [`99-key-decisions.md § D11`](./99-key-decisions.md#d11--openai-generation-has-a-deterministic-validated-fallback), [`99-key-decisions.md § D15`](./99-key-decisions.md#d15--predefined-entities-resolve-domain-terminology-before-rewrite), [`99-key-decisions.md § D16`](./99-key-decisions.md#d16--retrieval-is-document-version-aware-by-default), [`99-key-decisions.md § D46`](./99-key-decisions.md#d46--context-compression-is-a-provenance-preserving-generation-projection)

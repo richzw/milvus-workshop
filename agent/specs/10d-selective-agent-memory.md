@@ -259,7 +259,7 @@ Initial rule scores and precedence are binding:
 | registered ambiguous future-utility wording with no higher signal | `0.40` | `ephemeral`; eligible for optional LLM review |
 | ordinary validated turn | `0.20` | `ephemeral` |
 
-Higher-precedence rules win; additive recurrence never downgrades a result. Scores below `0.45` are ephemeral, scores in `0.45..<0.80` are candidates, and scores at or above `0.80` are candidates unless an explicit rule makes them protected. The optional LLM ambiguity band is `0.40..0.60`; it may choose only `ephemeral` or `promote_candidate`, never `protected`.
+Higher-precedence rules win; additive recurrence never downgrades a result. Scores below `0.45` are ephemeral, scores in `0.45..<0.80` are candidates, and scores at or above `0.80` are candidates unless an explicit rule makes them protected. The optional LLM ambiguity band is `0.40..0.60`; it may choose only `ephemeral` or `promote_candidate`, never `protected`. Under the initial rule table the only scores that reach that band are the ambiguous future-utility rule's `0.40` and its `0.50` recurrence variant, so the selector currently arbitrates exactly one signal; widening the band without adding rule scores inside it changes nothing.
 
 Explicit marker parsing is deliberately bounded:
 
@@ -413,7 +413,7 @@ final_memory_score =
 
 The exact factor calibration is fixed by evaluation fixtures, not guessed at runtime. A very recent irrelevant event must not outrank an older exact task fact solely because of recency.
 
-### 6.3 Reconfirmation and anti-feedback invariant
+### 6.4 Reconfirmation and anti-feedback invariant
 
 Simply retrieving or displaying a memory never refreshes `event_time`, `last_confirmed_at` or TTL. Otherwise frequently recalled items become permanently self-reinforcing.
 

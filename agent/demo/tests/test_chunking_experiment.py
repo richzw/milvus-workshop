@@ -363,12 +363,12 @@ class ChunkingExperimentTests(unittest.TestCase):
         configs = load_chunking_configs(CONFIGS)
         self.assertEqual(
             [config.name for config in configs],
-            ["focused_24_80", "broad_48_220"],
+            ["small_32_128", "medium_64_256", "large_96_512"],
         )
         invalid_payloads = [
             {"schema_version": "wrong", "configs": []},
             {
-                "schema_version": "chunking-experiment-v1",
+                "schema_version": "chunking-experiment-v2",
                 "configs": [
                     {
                         "name": "only",
@@ -380,7 +380,7 @@ class ChunkingExperimentTests(unittest.TestCase):
                 ],
             },
             {
-                "schema_version": "chunking-experiment-v1",
+                "schema_version": "chunking-experiment-v2",
                 "configs": [
                     {
                         "name": name,
@@ -389,7 +389,7 @@ class ChunkingExperimentTests(unittest.TestCase):
                         "overlap_tokens": 3,
                         "boundary_policy": BOUNDARY_POLICY,
                     }
-                    for name in ("same_a", "same_b")
+                    for name in ("same_a", "same_b", "same_c")
                 ],
             },
         ]
@@ -405,7 +405,7 @@ class ChunkingExperimentTests(unittest.TestCase):
                         load_chunking_configs(path)
 
     def test_runner_compares_same_corpus_and_recommends_by_metrics(self) -> None:
-        times = iter([1.0, 1.1, 2.0, 2.2])
+        times = iter([1.0, 1.1, 2.0, 2.2, 3.0, 3.3])
         with patch(
             "agent_workshop_demo.embedding."
             "_default_text_embedding_provider",
@@ -420,41 +420,50 @@ class ChunkingExperimentTests(unittest.TestCase):
                 clock=lambda: next(times),
             )
 
-        self.assertEqual(report["num_configs"], 2)
-        self.assertEqual(report["num_anchor_cases"], 3)
-        self.assertEqual(report["recommended_config"], "broad_48_220")
-        focused, broad = report["results"]
-        self.assertEqual(focused["ingestion_time_ms"], 100.0)
-        self.assertEqual(broad["ingestion_time_ms"], 200.0)
+        self.assertEqual(report["schema_version"], "chunking-experiment-v2")
+        self.assertEqual(report["num_configs"], 3)
+        self.assertEqual(report["num_anchor_cases"], 4)
+        self.assertIsNone(report["recommended_config"])
+        self.assertEqual(report["evaluation_status"], "evaluation_incomplete")
+        self.assertEqual(
+            set(report["recommendation"]["rejected"]),
+            {"small_32_128", "medium_64_256", "large_96_512"},
+        )
+        small, medium, large = report["results"]
+        self.assertEqual(small["ingestion_time_ms"], 100.0)
+        self.assertEqual(medium["ingestion_time_ms"], 200.0)
+        self.assertEqual(large["ingestion_time_ms"], 300.0)
         self.assertGreater(
-            focused["corpus"]["textual_chunk_count"],
-            broad["corpus"]["textual_chunk_count"],
+            small["corpus"]["textual_chunk_count"],
+            large["corpus"]["textual_chunk_count"],
         )
-        self.assertEqual(
-            focused["corpus"]["over_max_chunk_count"],
-            0,
-        )
-        self.assertEqual(broad["corpus"]["over_max_chunk_count"], 0)
-        self.assertEqual(focused["index_size_bytes"], None)
-        self.assertEqual(focused["index_size_status"], "not_built")
-        self.assertLess(
-            focused["retrieval_recall_at_20"],
-            broad["retrieval_recall_at_20"],
-        )
-        self.assertEqual(broad["retrieval_recall_at_20"], 1.0)
-        self.assertEqual(
-            broad["selected_context_recall_at_5"],
-            1.0,
-        )
+        for result in report["results"]:
+            self.assertEqual(result["corpus"]["over_max_chunk_count"], 0)
+            self.assertIn("character_length", result["corpus"])
+            self.assertEqual(result["index_size_bytes"], None)
+            self.assertEqual(result["index_size_status"], "not_built")
+            self.assertEqual(
+                result["isolation"]["index_status"],
+                "not_built_local_in_memory",
+            )
+            self.assertIn("reranked_recall_at_8", result)
+            self.assertIn("citation_precision", result)
+            self.assertIn("required_fact_coverage", result)
+            self.assertEqual(result["abstention_correctness"], 1.0)
+            self.assertIsNone(result["faithfulness"])
+            self.assertIsNone(result["answer_relevancy"])
+            self.assertEqual(result["usage"]["provider_call_count"], 0)
+            self.assertIn("p95", result["latency_ms"]["end_to_end"])
 
     def test_runner_rejects_malformed_anchor_fixture(self) -> None:
         payload = {
-            "schema_version": "chunking-anchors-v1",
+            "schema_version": "chunking-anchors-v2",
             "cases": [
                 {
                     "case_id": "bad",
                     "question": "query",
                     "filters": {},
+                    "should_abstain": False,
                     "expected_anchors": [
                         {
                             "source_uri": "source",
@@ -474,6 +483,85 @@ class ChunkingExperimentTests(unittest.TestCase):
                     local_dir=LOCAL_DIR,
                     mock_s3_dir=MOCK_S3_DIR,
                 )
+
+    def test_calibrated_frontier_requires_matching_review_artifact(self) -> None:
+        with patch(
+            "agent_workshop_demo.embedding."
+            "_default_text_embedding_provider",
+            return_value=DeterministicTextEmbeddingProvider(),
+        ), patch.dict(
+            "agent_workshop_demo.chunking_experiment.COMMITTED_QUALITY_GATES",
+            {
+                "retrieval_recall_at_20": 0.0,
+                "selected_context_recall_at_5": 0.0,
+                "citation_precision": 0.0,
+                "citation_coverage": 0.0,
+                "required_fact_coverage": 0.0,
+                "abstention_correctness": 0.0,
+                "markdown_section_preservation_rate": 0.0,
+                "release_boundary_preservation_rate": 0.0,
+                "pdf_page_preservation_rate": 0.0,
+            },
+            clear=True,
+        ):
+            def grader(
+                _question: str,
+                _answer: str,
+                _contexts: list[str],
+            ) -> dict[str, float]:
+                return {"faithfulness": 1.0, "answer_relevancy": 1.0}
+            evaluated = run_chunking_experiment(
+                configs_path=CONFIGS,
+                anchors_path=ANCHORS,
+                local_dir=LOCAL_DIR,
+                mock_s3_dir=MOCK_S3_DIR,
+                image_provider=DeterministicImageEmbeddingProvider(),
+                semantic_grader=grader,
+                grader_calibrated=True,
+                semantic_grader_profile="test-grader-v1-calibrated",
+            )
+            chosen_name = evaluated["recommendation"]["pareto_frontier"][0]
+            chosen = next(
+                item["config"]
+                for item in evaluated["results"]
+                if item["config"]["name"] == chosen_name
+            )
+            with tempfile.TemporaryDirectory() as temp_dir:
+                recommendation = Path(temp_dir) / "recommendation.json"
+                recommendation.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "chunking-recommendation-v1",
+                            "experiment_fingerprint": evaluated[
+                                "experiment_fingerprint"
+                            ],
+                            "evaluation_fingerprint": evaluated[
+                                "evaluation_fingerprint"
+                            ],
+                            "config_name": chosen["name"],
+                            "config_fingerprint": chosen[
+                                "config_fingerprint"
+                            ],
+                            "reviewer": "workshop-owner",
+                            "rationale": "Reviewed the independent dimensions.",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                reviewed = run_chunking_experiment(
+                    configs_path=CONFIGS,
+                    anchors_path=ANCHORS,
+                    local_dir=LOCAL_DIR,
+                    mock_s3_dir=MOCK_S3_DIR,
+                    image_provider=DeterministicImageEmbeddingProvider(),
+                    semantic_grader=grader,
+                    grader_calibrated=True,
+                    semantic_grader_profile="test-grader-v1-calibrated",
+                    recommendation_path=recommendation,
+                )
+
+        self.assertEqual(reviewed["evaluation_status"], "complete")
+        self.assertEqual(reviewed["recommended_config"], chosen["name"])
 
 
 if __name__ == "__main__":

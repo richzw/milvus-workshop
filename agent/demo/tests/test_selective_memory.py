@@ -58,6 +58,7 @@ class RecordingSelectiveClient:
         }
         self.loaded: list[str] = []
         self.search_rows: dict[str, list[dict[str, Any]]] = {}
+        self.query_calls: list[dict[str, Any]] = []
 
     def has_collection(self, *, collection_name: str) -> bool:
         return collection_name in self.rows
@@ -66,6 +67,7 @@ class RecordingSelectiveClient:
         self.loaded.append(collection_name)
 
     def query(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.query_calls.append(dict(kwargs))
         collection = str(kwargs["collection_name"])
         expression = str(kwargs["filter"])
         return [
@@ -102,6 +104,7 @@ class RecordingSelectiveClient:
         return [[{"entity": dict(row)} for row in self.search_rows.get(collection, [])]]
 
     def query_iterator(self, **kwargs: Any) -> Any:
+        self.query_calls.append(dict(kwargs))
         collection = str(kwargs["collection_name"])
         rows = [dict(row) for row in self.rows[collection].values()]
         batches = [rows, []]
@@ -132,6 +135,28 @@ class SelectiveMemoryTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.environment.stop()
+
+    def test_milvus_fact_filter_uses_timestamptz_literal(self) -> None:
+        client = RecordingSelectiveClient()
+        store = MilvusSelectiveMemoryStore(client)
+
+        self.assertEqual(
+            store.list_facts(
+                "session_a",
+                now_ms=2_000,
+                permission_scope_hashes=frozenset(
+                    {SESSION_PRIVATE_SCOPE_HASH}
+                ),
+            ),
+            [],
+        )
+
+        expression = client.query_calls[-1]["filter"]
+        self.assertIn(
+            "expires_at > ISO '1970-01-01T00:00:02.000Z'",
+            expression,
+        )
+        self.assertNotIn('expires_at > "1970-', expression)
 
     def test_decay_profiles_hit_offset_and_scale_points(self) -> None:
         now = 100 * DAY_MS

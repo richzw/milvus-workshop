@@ -15,6 +15,7 @@ from agent_workshop_demo.milvus_time import (
     encode_expiry,
     epoch_ms_from_milvus,
     milvus_timestamp,
+    timestamp_literal,
 )
 from agent_workshop_demo.retrieval import InMemoryHybridRetriever
 from agent_workshop_demo.sample_data import load_kb_chunks
@@ -23,6 +24,7 @@ from agent_workshop_demo.schema.collections import (
     DOC_DEDUP_SIGNATURES_INDEXES,
     KB_CHUNKS_COLLECTION,
     KB_CHUNKS_INDEXES,
+    RETRIEVAL_ANALYZER_PARAMS,
 )
 from agent_workshop_demo.schema.evolution import (
     MilvusSchemaEvolution,
@@ -251,6 +253,36 @@ class Milvus3CapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported aggregation"):
             InMemoryHybridRetriever(chunks).aggregations(results, ["text"])
 
+    def test_bool_facets_do_not_enter_unsupported_group_by(self) -> None:
+        chunks = load_kb_chunks()
+        selected = [
+            next(item for item in chunks if item.has_image_vector),
+            next(item for item in chunks if not item.has_image_vector),
+        ]
+        hits = [[
+            {"distance": 1.0, "entity": item.to_dict()}
+            for item in selected
+        ]]
+        client = SearchClient({"text_vector": hits, "sparse_vector": hits})
+        adapter = MilvusHybridRetriever(client)
+        results = adapter.search("Milvus", top_k=2)
+
+        facets = adapter.aggregations(
+            results,
+            ["source_type", "has_image_vector", "is_current"],
+        )
+
+        self.assertEqual(client.query_calls[0]["group_by_fields"], ["source_type"])
+        self.assertEqual(facets["has_image_vector"], {"False": 1, "True": 1})
+        self.assertEqual(facets["is_current"], {"True": 2})
+
+        query_count = len(client.query_calls)
+        self.assertEqual(
+            adapter.aggregations(results, ["has_image_vector"]),
+            {"has_image_vector": {"False": 1, "True": 1}},
+        )
+        self.assertEqual(len(client.query_calls), query_count)
+
     def test_bm25_sindi_and_minhash_dido_definitions(self) -> None:
         self.assertEqual(KB_CHUNKS_COLLECTION["functions"][0]["type"], "BM25")
         default_sparse = next(
@@ -275,6 +307,18 @@ class Milvus3CapabilityTests(unittest.TestCase):
         )
         self.assertIsInstance(dedup_index, dict)
         self.assertEqual(dedup_index["index_type"], "MINHASH_LSH")
+
+    def test_bm25_synonym_phrases_are_server_safe_and_expanding(self) -> None:
+        synonym_filter = RETRIEVAL_ANALYZER_PARAMS["filter"][1]
+        self.assertEqual(
+            synonym_filter["synonyms"],
+            [
+                r"object\ storage, s3, minio",
+                r"vector\ database, vector\ db",
+                r"full\ text, bm25",
+            ],
+        )
+        self.assertIs(synonym_filter["expand"], True)
 
     def test_dedup_store_never_writes_function_output(self) -> None:
         client = DedupClient()
@@ -306,6 +350,10 @@ class Milvus3CapabilityTests(unittest.TestCase):
 
     def test_timestamptz_codec_is_strict_and_reversible(self) -> None:
         self.assertEqual(milvus_timestamp(2_000), "1970-01-01T00:00:02.000Z")
+        self.assertEqual(
+            timestamp_literal(2_000),
+            "ISO '1970-01-01T00:00:02.000Z'",
+        )
         self.assertEqual(epoch_ms_from_milvus("1970-01-01T00:00:02.000Z"), 2_000)
         self.assertEqual(encode_expiry({"expires_at": 2_000})["expires_at"], "1970-01-01T00:00:02.000Z")
         with self.assertRaises(ValueError):
@@ -371,20 +419,7 @@ class Milvus3CapabilityTests(unittest.TestCase):
                 "nullable": True,
                 "max_length": 32_768,
                 "enable_analyzer": True,
-                "analyzer_params": {
-                    "tokenizer": "standard",
-                    "filter": [
-                        "lowercase",
-                        {
-                            "type": "synonym",
-                            "synonyms": [
-                                "object storage, s3, minio",
-                                "vector database, vector db",
-                                "full text, bm25",
-                            ],
-                        },
-                    ],
-                },
+                "analyzer_params": RETRIEVAL_ANALYZER_PARAMS,
             }
         ]
         report = evolution.add_bm25_function(
@@ -484,20 +519,7 @@ class Milvus3CapabilityTests(unittest.TestCase):
             nullable=True,
             max_length=32_768,
             enable_analyzer=True,
-            analyzer_params={
-                "tokenizer": "standard",
-                "filter": [
-                    "lowercase",
-                    {
-                        "type": "synonym",
-                        "synonyms": [
-                            "object storage, s3, minio",
-                            "vector database, vector db",
-                            "full text, bm25",
-                        ],
-                    },
-                ],
-            },
+            analyzer_params=RETRIEVAL_ANALYZER_PARAMS,
         )
         proto, _, _ = prepare.Prepare.get_field_schema(field.to_dict())
         described = abstract.FieldSchema(proto).dict()

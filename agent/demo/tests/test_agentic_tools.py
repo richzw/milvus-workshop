@@ -96,7 +96,7 @@ class AgenticToolTests(unittest.TestCase):
         )
         self.assertTrue(response["answer_validation"]["valid"])
 
-    def test_comparison_runs_dependent_meeting_and_product_tools(self) -> None:
+    def test_comparison_runs_parallel_meeting_and_product_tools(self) -> None:
         response = AgenticRAGWorkflow().run(
             "本季度客户最关心的问题有没有被产品路线图覆盖？"
         )
@@ -110,7 +110,10 @@ class AgenticToolTests(unittest.TestCase):
             [call["tool"] for call in response["tool_calls"]],
             ["search_meeting_notes", "search_product_docs"],
         )
-        self.assertEqual(response["retry_count"], 1)
+        self.assertEqual(response["retry_count"], 0)
+        self.assertTrue(
+            all(not item["depends_on"] for item in response["query_plan"])
+        )
         self.assertEqual(response["terminal_status"], "answered")
         self.assertEqual(response["evidence_grade"]["missing_aspects"], [])
         self.assertTrue(response["answer_validation"]["valid"])

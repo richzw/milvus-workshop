@@ -1,6 +1,6 @@
 # Agentic RAG Flow
 
-Status: aligned with [`specs/12-agent-workflow.md`](./specs/12-agent-workflow.md) · Last updated: 2026-07-30
+Status: aligned with [`specs/12-agent-workflow.md`](./specs/12-agent-workflow.md) · Last updated: 2026-08-27
 
 本文是当前实现的导览图；节点契约、状态不变量和安全边界以
 [`specs/`](./specs/index.md) 为准。Local runtime 与 LangGraph runtime
@@ -25,13 +25,14 @@ flowchart TD
     CACHE -- validated hit --> OUTPUT
     CACHE -- miss / stale / error --> EXPERIENCE["recall_authorized_experience<br/>仅作私有 planning context"]
     EXPERIENCE --> PLAN["plan_retrieval<br/>Tool Selection + Rewrite / Decompose"]
-    PLAN --> EXECUTE["execute_tool_plan<br/>Hybrid Retrieval + Merge + Fingerprint"]
+    PLAN --> EXECUTE["execute_tool_plan<br/>RETRIEVAL_TIER 选定的检索 lane + Merge + Fingerprint"]
 
     EXECUTE -- "candidate pool unchanged" --> ABSTAIN["abstain: no_progress"]
     EXECUTE -- changed --> RERANK["rerank_evidence"]
     RERANK --> EVALUATE{"evaluate_evidence<br/>Grade + Typed Next Action"}
 
-    EVALUATE -- answer --> GENERATE["generate_candidate_answer"]
+    EVALUATE -- answer --> PREPARE["prepare_generation_context<br/>可选 provenance-safe 压缩，默认 disabled"]
+    PREPARE --> GENERATE["generate_candidate_answer"]
     EVALUATE -- abstain --> GENERATE
     EVALUATE -- "retry(unique next_plan)" --> RETRY_FP{"retry-plan fingerprint<br/>是否重复？"}
     RETRY_FP -- duplicate --> ABSTAIN_RETRY["abstain: duplicate_retry_query"]
@@ -124,8 +125,12 @@ flowchart TD
         SEQUENTIAL --> EXECUTE
 
         EXECUTE["execute_tool_plan<br/>Dense + Sparse + Metadata/Version Filters"]
+        TIER["RETRIEVAL_TIER（启动期配置，非每查询分支）<br/>hybrid_dense = T2 默认 · lexical_rewrite = T1 · lexical_only = T0"]
+        TIER -. "决定可达的检索 lane" .-> EXECUTE
         KB[("Milvus kb_chunks")]
+        DOCS[("Milvus kb_documents<br/>StructArray 投影，默认 disabled")]
         KB -.-> EXECUTE
+        DOCS -. "struct_element / two_stage / fused<br/>element 解析回 chunk_id 后才算证据" .-> EXECUTE
 
         EXECUTE --> MERGE["按 chunk_id merge / dedupe<br/>保留 tool + subquery provenance"]
         MERGE --> EXPAND["Exhaustive query: bounded document sibling expansion"]
@@ -139,7 +144,7 @@ flowchart TD
         RERANK --> GRADE["evaluate_evidence<br/>Grade + Retry Planning"]
         GRADE --> BASIS{"Evidence basis"}
 
-        BASIS -- "single_strong_chunk" --> SINGLE["Focused atomic feature only<br/>score ≥ 0.80 + direct section match<br/>single tool/aspect + version isolated"]
+        BASIS -- "single_strong_chunk" --> SINGLE["Focused atomic feature only<br/>score ≥ 排序 reranker 自报阈值 + direct section match<br/>single tool/aspect + version isolated"]
         BASIS -- "multi_chunk_coverage" --> MULTI["≥2 relevant chunks<br/>完整 tool/version coverage"]
         BASIS -- "insufficient_evidence" --> GAP["真实 missing_aspects<br/>weak / indirect / multi-aspect / tool / version / exhaustive"]
 
@@ -154,7 +159,8 @@ flowchart TD
     end
 
     subgraph ANSWER["六、Answer and output gate"]
-        ANSWER_ACTION --> GENERATE["generate_candidate_answer<br/>只使用 selected live KB chunks"]
+        ANSWER_ACTION --> PREPARE["prepare_generation_context<br/>identity 或 selective/summary/extraction 投影<br/>span 校验失败则整体回退原 chunks"]
+        PREPARE --> GENERATE["generate_candidate_answer<br/>只使用 selected live KB chunks"]
         EXHAUSTED --> GENERATE
         NO_PROGRESS --> GENERATE
         DUPLICATE --> GENERATE
@@ -198,7 +204,7 @@ flowchart TD
     classDef memory fill:#f9f0ff,stroke:#9254de,color:#391085;
 
     class DIRECTIVE,AMBIGUOUS,ALLOWED,CACHE_VALID,READY,PROGRESS,BASIS,RETRY_BUDGET,RETRY_FP,CONSUMER decision;
-    class MEMORY_STORE,SELECTIVE_STORE,ENTITY_CATALOG,RESPONSE_CACHE,EXPERIENCE_STORE,KB storage;
+    class MEMORY_STORE,SELECTIVE_STORE,ENTITY_CATALOG,RESPONSE_CACHE,EXPERIENCE_STORE,KB,DOCS,TIER storage;
     class FINAL,OUTPUT terminal;
     class CLARIFY,DENIED,NO_PROGRESS,EXHAUSTED,DUPLICATE,CANCEL failure;
     class CHRONO,SEMANTIC,SKIP,EXPERIENCE,PERSIST,CONVERSATION_SINK,SELECTIVE_SINK,CACHE_SINK memory;
@@ -208,7 +214,7 @@ flowchart TD
 
 | 问题形态 | 最低回答条件 | 不满足时 |
 | --- | --- | --- |
-| Focused、单一命名功能 | 恰好一条 relevant chunk，rerank score `≥ 0.80`，section 名直接出现在问题中，单工具、单方面、版本匹配且无冲突 | `single_weak_chunk`、`single_indirect_chunk`、`multi_aspect_requires_coverage` 或 coverage gap |
+| Focused、单一命名功能 | 恰好一条 relevant chunk，rerank score 达到**实际完成排序的那个 reranker 自报的** `strong_single_evidence_threshold`，section 名直接出现在问题中，单工具、单方面、版本匹配且无冲突 | `single_weak_chunk`、`single_indirect_chunk`、`multi_aspect_requires_coverage` 或 coverage gap |
 | 普通多证据问题 | 至少两条 relevant chunks，并覆盖全部 selected tools 与 version scopes | `incomplete_multi_evidence`、`tool:<name>` 或 `version:<scope>` |
 | Exhaustive | 普通多证据条件 + bounded sibling expansion 完整覆盖 | `incomplete_exhaustive_coverage` |
 | Comparison | 每个请求 side 都有证据，同一 document family 的版本覆盖完整 | 缺失 side/tool/version 后 retry 或 abstain |
