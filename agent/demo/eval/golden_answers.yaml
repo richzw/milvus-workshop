@@ -84,3 +84,85 @@ q007:
   required_citations:
     - "doc_go_button_guide_v1_c001"
     - "doc_go_button_guide_v2_c001"
+
+q008:
+  question: "请查看产品路线图里的下一季度计划。"
+  golden_answer: >
+    权限检查未通过，应在私有检索前终止。
+  required_facts:
+  required_citations:
+
+q009:
+  question: "S3 文档同步的机制原理是什么？"
+  golden_answer: >
+    同步机制先扫描 bucket 并检测变更对象，再解析文档、切块、生成 embedding，
+    最后写入 Milvus；step-back 的架构背景不能单独回答这个具体机制问题。
+  required_facts:
+    - "chunking"
+    - "embedding"
+  required_citations:
+    - "doc_s3_sync_design_c003"
+    - "doc_rag_arch_v1_p003_c002"
+
+q010:
+  question: "段位是怎么定义的？"
+  golden_answer: >
+    “段位”在 game 与 hr 两个 domain 下含义不同，无法消歧，应在检索前请求澄清。
+  required_facts:
+  required_citations:
+
+q011:
+  question: "介绍下 Milvus 3.0 Force Merge"
+  golden_answer: >
+    Force Merge 让运维显式合并符合条件的 segment，影响存储布局与查询效率，
+    而不是新增应用层检索能力。
+  required_facts:
+    - "Force Merge"
+    - "segments"
+  required_citations:
+    - "doc_milvus_feature_map_c002"
+
+q012:
+  question: "Milvus 3.0 有哪些特性？"
+  golden_answer: >
+    Milvus 3.0 的特性覆盖 Force Merge 的 segment 合并，以及向量与混合检索层的
+    text_vector/sparse_vector/image_vector 存储与 metadata filter。
+  required_facts:
+    - "Force Merge"
+    - "sparse_vector"
+  required_citations:
+    - "doc_milvus_feature_map_c001"
+    - "doc_milvus_feature_map_c002"
+
+q013:
+  question: "TTL Memory Policy 是什么？"
+  golden_answer: >
+    该问题应路由到 policy 工具；单条 security 文档不足以支撑多证据规则，应当拒答。
+  required_facts:
+  required_citations:
+
+q014:
+  question: "RAG 架构里 Milvus 负责哪一层？"
+  golden_answer: >
+    同 session 内重复的等价问题命中 grounded response cache，
+    保留原 citations，且不调用 search tools、reranker 或 answer generator。
+  required_facts:
+  required_citations:
+    - "doc_milvus_feature_map_c001"
+
+q015:
+  question: "你还记得我的偏好吗？"
+  golden_answer: >
+    显式 recall 只从同 session 的 Memory 回答，不产生 KB citation，也不选择检索工具。
+  required_facts:
+  required_citations:
+
+q016:
+  question: "RAG 架构里 Milvus 负责哪一层？"
+  golden_answer: >
+    主 reranker 不可用时，配置好的 wrapper 降级到确定性 rule reranker 并记录
+    registered fallback reason，golden path 仍然产出通过 citation 自检的答案。
+  required_facts:
+    - "hybrid retrieval"
+  required_citations:
+    - "doc_milvus_feature_map_c001"

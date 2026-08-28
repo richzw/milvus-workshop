@@ -1,6 +1,6 @@
 # 80 — Glossary
 
-Status: draft · Last updated: 2026-07-28
+Status: draft · Last updated: 2026-08-27
 
 ## Agent Chat
 
@@ -8,7 +8,7 @@ Status: draft · Last updated: 2026-07-28
 
 ## Agentic RAG
 
-由可观察、可分支的步骤组成的 RAG：意图判断、权限检查、受限工具选择、查询改写/拆解、多次或多跳检索、精排、证据判断、有限补充检索、回答与自检。它不是“让 LLM 自由调用任意工具”的同义词。
+由可观察、可分支的步骤组成的 RAG：意图判断、权限检查、受限工具选择、查询改写/step-back/拆解、多次或多跳检索、精排、证据判断、有限补充检索、可选上下文压缩、回答与自检。它不是“让 LLM 自由调用任意工具”的同义词。
 
 ## Tool
 
@@ -16,7 +16,15 @@ Agent 可选择的受限能力。Search tool 封装知识域与 metadata filter 
 
 ## Query plan
 
-当前问题的一到三个检索子任务。每项绑定一个注册工具，可声明对前序子任务的依赖。Parallel decomposition 同时覆盖多个方面；multi-hop plan 用第一跳证据细化后续查询。
+当前问题的一到三个检索子任务。每项绑定一个注册工具，标记 primary/background/aspect/hop 角色，可声明对前序子任务的依赖。Parallel decomposition 同时覆盖多个方面；multi-hop plan 用第一跳证据细化后续查询。
+
+## Query transformation
+
+在检索前将原问题映射为受限检索计划。本项目每次只选择 `identity`、`rewrite`、`step_back` 或 `decompose` 一个主策略，且派生查询必须继承原意图、产品/版本/否定约束、permission、tool allow-list 和 version scope。
+
+## Step-back query
+
+为具体问题派生一个更宽泛的原理或架构背景问题，并与保留原始主体的 primary query 共同检索。背景证据只能补充解释，不能单独证明具体功能、版本或操作结论。
 
 ## Query classifier
 
@@ -74,6 +82,10 @@ Recall 是 Milvus 从知识库中尽量找全候选；rerank 是针对当前 que
 
 Evidence 是本次检索和精排产生的候选记录；selected context 是其中真正发送给 answer generator 的子集。只有 selected context 可以生成 citation。
 
+## Context compression
+
+证据充分性确定后，将 selected original chunks 投影为更小的 generation context。Selective 保留可精确对回原文的句段；summary/extraction 是派生内容，每项都必须绑定原文 support spans。压缩不改变 evidence grade、source chunk 或 citation identity。
+
 ## Evidence grader
 
 判断当前证据是否覆盖问题、是否足以回答以及是否需要重试的节点。它不替代 reranker，也不直接生成答案。
@@ -94,13 +106,77 @@ Evidence 是本次检索和精排产生的候选记录；selected context 是其
 
 一次查询的教学级执行记录，包括节点输入摘要、参数、计数、retry 和 latency。Streamlit session state 中的 Trace 是临时数据，不是生产审计日志。
 
+## Error analysis
+
+人工阅读一批有代表性的 output/trace，先用 `overall_pass` 与自由文本 `review_note` 描述实际问题，再把 notes 聚类为命名 failure categories 的过程。它用于发现产品真实的 generalization failures；不是从通用 metric catalog 复制一组分数。
+
+## Goal metric
+
+衡量系统在当前产品目标上是否改善的 active metric，例如 expected-source retrieval recall。它必须绑定 owner 和实验接受、回滚或调查动作；产品 north star 改变时可以被修改或退休。
+
+## Guardrail metric
+
+监控不能破坏的 hard constraint 或已知 incident class 的 active metric，例如 citation 必须解析、permission 前不得检索。长期满分不构成删除理由；只有约束被正式移除时才可退休。
+
+## Operational metric
+
+从 trace 或 runtime 自动采集的 latency、tokens/cost、provider calls 或 throughput。它解释资源与容量，不代表答案质量；没有固定 runtime/provider/dataset/concurrency profile 时不得与 baseline 比较。
+
+## Metric registry
+
+active eval metrics 的版本化决策清单。每项记录 role、问题、证据来源、grader、dataset segment、owner、threshold/budget、触发动作、运行成本、cadence 与 lifecycle。runner 能输出的 diagnostic 字段不等于 registry 中需要长期维护的 metric。
+
 ## Hybrid search
 
 经 Phase 0 验证后采用的 dense 与 sparse/BM25 候选组合方式。具体 SDK API、融合策略和分数语义以验证结果为准。
 
+## Retrieval tier
+
+检索复杂度阶梯上的一级：T0 lexical only、T1 lexical + bounded query transformation、T2 pre-embedded hybrid（当前默认）、T3 on-the-fly embedding、T4 hot/cold embedding tiers、T5 full pre-embedding。Tier 由 freshness、corpus churn、query pattern、scale/latency 和 team capability 五项输入选择，升级必须有记录在案的 failure mode 和对照报告。它与 `flat_hybrid`/`struct_element`/`struct_two_stage`/`struct_fused` 不是同一维度：后者是 T2 内部的 retrieval profile。
+
+## Lexical-only baseline
+
+只使用 `kb_chunks` BM25 Function 的对照 arm（T0）。它不参与选型竞争，作用是给出 dense lane 在当前语料上的增量分母；任何 tier 对照报告缺少该 arm 即为 `evaluation_incomplete`。
+
+## Corpus churn
+
+语料中每天/每月被新增或修改的文档比例。高 churn（日 > 10%）使预嵌入的 re-ingest 成本压过其收益；低 churn（月 < 5%）才让 T2/T5 的预嵌入摊销成立。它是 tier 选择输入，不是质量指标。
+
+## On-the-fly embedding
+
+查询时才对候选 shortlist 生成向量、不持久化 chunk 向量的 T3 做法。freshness 永远最新，模型切换只是一次调用点修改，代价是每次查询的 embedding 延迟。本仓库未实现，仅作为高 churn 或模型下线场景的记录出口。
+
+## Hot/cold embedding tiers
+
+按访问频次把语料分为预嵌入的 hot 子集与按需嵌入的 cold 尾部的 T4 做法（Pareto 假设：约 20% 文档承载约 80% 流量）。模型更新只需重嵌 hot 子集。本仓库未实现，仅作为记录出口。
+
+## Embedding fingerprint gate
+
+启动时校验 chunk metadata 中记录的 embedding provider/model/dimension 指纹与当前配置是否一致。不一致必须直接失败，而不是混用两个向量空间；它是 T2 下模型迁移成本可见的机制。
+
+## StructArray
+
+Milvus 中的 `ARRAY<STRUCT>`：一个 parent entity 内保存有序、可变长且共享预定义 schema 的 elements。本项目只用它表示 `kb_documents.passages`，使 passage scalar/vector subfields 在同一 offset 上可相关过滤和搜索；它不是任意 nested JSON。
+
+## Parent entity vs Struct element
+
+Parent entity 是业务授权、版本和展示的整体文档；Struct element 是其中可搜索的 passage。Element-level hit 的身份是 parent primary key 加 offset，但本项目解析后仍以稳定 `chunk_id` 作为 evidence/citation identity。
+
+## EmbeddingList search
+
+查询和 parent 都用一组 vectors 表示，通过 `MAX_SIM*` 匹配并返回 entity-level 结果。在本 Agentic RAG 中它只用作多方面问题的文档 shortlist，必须再做 element-level search 才能得到可引用 passage。
+
+## Element-level search
+
+一个普通 query vector 让 StructArray 中每个 element vector 独立参与 ANN，返回 parent 和 element offset。`element_filter` 会约束同一 element 上的 scalar 条件；同一 parent 可以因多个 passage 命中而出现多次。
+
+## Collapse
+
+当 hybrid search 混合 element 与 entity 粒度时，将已返回的 element hits 聚合成 parent score 的过程。Collapse 不会重新扫描 parent 的所有 elements，因此 ANN sub-search `limit` 会影响结果；collapsed parent 在本项目中不是可引用证据。
+
 ## Min-Max Chunking
 
-通过最小/最大长度、边界与 overlap 规则约束 chunk 的实验策略。它是待评估方案，不是已选择的第三方库。
+通过最小/最大 token 长度、硬语义边界与 overlap 规则约束 chunk 的实验策略。它是待经隔离索引的端到端检索/生成评测选型的方案，不是已选择的第三方库。
 
 ## MFS
 

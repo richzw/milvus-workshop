@@ -1,5 +1,6 @@
 # Local credentials and machine-specific demo configuration.
 demo/.env
+.claude/settings.local.json
 
 # Python runtime artifacts.
 __pycache__/

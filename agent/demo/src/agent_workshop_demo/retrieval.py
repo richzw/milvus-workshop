@@ -166,9 +166,7 @@ class InMemoryHybridRetriever:
 
         validate_image_search_top_k(top_k)
         validated_query = validate_image_query_vector(query_vector)
-        validated_fingerprint = validate_image_fingerprint(
-            image_fingerprint
-        )
+        validated_fingerprint = validate_image_fingerprint(image_fingerprint)
         validated_filters = image_only_filters(filters)
         filtered = self._apply_filters(
             self.chunks,
@@ -182,9 +180,7 @@ class InMemoryHybridRetriever:
             )
             image_vector = chunk.image_vector
             if image_vector is None:
-                raise ValueError(
-                    "Image search candidate is missing image_vector"
-                )
+                raise ValueError("Image search candidate is missing image_vector")
             scored.append(
                 (
                     image_cosine_score(
@@ -205,6 +201,42 @@ class InMemoryHybridRetriever:
                 image_score=score,
             )
             for rank, (score, chunk) in enumerate(ordered, start=1)
+        ]
+
+    def search_sparse(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        filters: dict[str, Any] | None = None,
+        order_by: list[str] | None = None,
+    ) -> list[SearchResult]:
+        """Return the deterministic lexical lane without dense contribution."""
+
+        if top_k <= 0:
+            raise ValueError("top_k must be greater than zero")
+        filtered = self._apply_filters(self.chunks, normalize_filters(filters))
+        query_sparse = sparse_vector(query)
+        scored = sorted(
+            (
+                (self._keyword_score(query_sparse, item.sparse_vector), item)
+                for item in filtered
+            ),
+            key=lambda item: (-item[0], item[1].chunk_id),
+        )[:top_k]
+        return [
+            SearchResult(
+                chunk=chunk,
+                rank=rank,
+                dense_score=0.0,
+                keyword_score=score,
+                recency_score=0.0,
+                priority_score=0.0,
+                hybrid_score=score,
+                retrieval_profile="flat_bm25",
+                retrieval_paths=("flat_bm25",),
+            )
+            for rank, (score, chunk) in enumerate(scored, start=1)
         ]
 
     def aggregations(
@@ -260,9 +292,7 @@ class InMemoryHybridRetriever:
         """Return authorized chunks for bounded cache freshness checks."""
 
         expected = list(dict.fromkeys(chunk_ids))
-        if not 1 <= len(expected) <= 16 or any(
-            not item.strip() for item in expected
-        ):
+        if not 1 <= len(expected) <= 16 or any(not item.strip() for item in expected):
             raise ValueError("chunk_ids must contain 1..16 non-empty ids")
         validated_filters = normalize_filters(filters)
         allowed = self._apply_filters(self.chunks, validated_filters)
@@ -300,7 +330,6 @@ class InMemoryHybridRetriever:
             1.0,
             sum(chunk_sparse[token] for token in overlap) * 4,
         )
-
 
 
 def parse_order_by(order_by: list[str]) -> list[tuple[str, str]]:
@@ -344,15 +373,18 @@ def order_search_results(
 
     def scalar_key(result: SearchResult) -> tuple[float, ...]:
         return tuple(
-            float(getattr(result.chunk, field))
-            * (1 if direction == "asc" else -1)
+            float(getattr(result.chunk, field)) * (1 if direction == "asc" else -1)
             for field, direction in parsed
         )
 
     if order_mode == "scalar" and parsed:
         return sorted(
             results,
-            key=lambda item: (*scalar_key(item), -item.hybrid_score, item.chunk.chunk_id),
+            key=lambda item: (
+                *scalar_key(item),
+                -item.hybrid_score,
+                item.chunk.chunk_id,
+            ),
         )
     return sorted(
         results,

@@ -7,7 +7,7 @@ import math
 import os
 import re
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 from importlib import import_module
 from typing import Any, Protocol
@@ -295,7 +295,7 @@ def normalize(vector: list[float]) -> list[float]:
     return [value / norm for value in vector]
 
 
-def cosine_similarity(left: list[float], right: list[float]) -> float:
+def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
     """Return non-negative cosine similarity for equal-length vectors."""
 
     if not left or not right or len(left) != len(right):

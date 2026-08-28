@@ -10,15 +10,18 @@ from agent_workshop_demo.ingestion import ingest_demo_sources
 from agent_workshop_demo.sample_data import load_kb_chunks
 from agent_workshop_demo.schema.collections import (
     CONVERSATION_MEMORY_COLLECTION,
+    CONVERSATION_MEMORY_INDEXES,
     DOC_DEDUP_SIGNATURES_COLLECTION,
     GROUNDED_RESPONSE_CACHE_COLLECTION,
     KB_CHUNKS_COLLECTION,
+    KB_DOCUMENTS_COLLECTION,
     MEMORY_EVENTS_COLLECTION,
     MEMORY_FACTS_COLLECTION,
     MEMORY_CONSOLIDATION_JOURNAL_COLLECTION,
 )
 from agent_workshop_demo.schema.pymilvus_adapter import MilvusHybridRetriever
 from agent_workshop_demo.schema.pymilvus_adapter import (
+    _index_requests,
     create_collections,
     create_indexes,
     drop_demo_collections,
@@ -98,6 +101,7 @@ class ProvisioningMilvusClient:
     def __init__(self) -> None:
         self.collections: set[str] = set()
         self.indexes: dict[str, set[str]] = {}
+        self.index_descriptions: dict[str, dict[str, dict[str, Any]]] = {}
         self.collection_calls: list[dict[str, Any]] = []
 
     def has_collection(self, *, collection_name: str) -> bool:
@@ -108,10 +112,12 @@ class ProvisioningMilvusClient:
         self.collection_calls.append(kwargs)
         self.collections.add(collection_name)
         self.indexes.setdefault(collection_name, set())
+        self.index_descriptions.setdefault(collection_name, {})
 
     def drop_collection(self, *, collection_name: str) -> None:
         self.collections.discard(collection_name)
         self.indexes.pop(collection_name, None)
+        self.index_descriptions.pop(collection_name, None)
 
     def prepare_index_params(self) -> RecordingIndexParams:
         return RecordingIndexParams()
@@ -127,12 +133,26 @@ class ProvisioningMilvusClient:
         self.indexes[collection_name].update(
             str(item["index_name"]) for item in index_params.requests
         )
+        for item in index_params.requests:
+            self.index_descriptions[collection_name][str(item["index_name"])] = {
+                **item,
+                "state": "Finished",
+            }
 
     def list_indexes(self, *, collection_name: str) -> list[str]:
         return sorted(self.indexes[collection_name])
 
     def drop_index(self, *, collection_name: str, index_name: str) -> None:
         self.indexes[collection_name].discard(index_name)
+        self.index_descriptions[collection_name].pop(index_name, None)
+
+    def describe_index(
+        self,
+        *,
+        collection_name: str,
+        index_name: str,
+    ) -> dict[str, Any]:
+        return dict(self.index_descriptions[collection_name][index_name])
 
     @staticmethod
     def assert_sync(sync: bool) -> None:
@@ -322,9 +342,7 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(results[0].chunk.chunk_id, chunk.chunk_id)
         self.assertEqual(results[0].rank, 1)
         self.assertGreater(results[0].hybrid_score, 0.9)
-        client.query_results = [
-            {"source_type": chunk.source_type, "count(*)": 1}
-        ]
+        client.query_results = [{"source_type": chunk.source_type, "count(*)": 1}]
         self.assertEqual(
             adapter.aggregations(results, ["source_type"]),
             {"source_type": {chunk.source_type: 1}},
@@ -467,6 +485,10 @@ class SchemaTests(unittest.TestCase):
             KB_CHUNKS_COLLECTION["collection_name"],
             "kb_chunks",
         )
+        self.assertEqual(KB_DOCUMENTS_COLLECTION["collection_name"], "kb_documents")
+        struct_fields = KB_DOCUMENTS_COLLECTION["fields"][-1]
+        self.assertEqual(struct_fields["element_type"], "Struct")
+        self.assertEqual(struct_fields["max_capacity"], 1024)
         self.assertEqual(
             CONVERSATION_MEMORY_COLLECTION["collection_name"],
             "conversation_memory",
@@ -527,6 +549,7 @@ class SchemaTests(unittest.TestCase):
             set(report["created"]),
             {
                 "kb_chunks",
+                "kb_documents",
                 "conversation_memory",
                 "grounded_response_cache",
                 "doc_dedup_signatures",
@@ -548,6 +571,7 @@ class SchemaTests(unittest.TestCase):
         client.collections.update(
             {
                 "kb_chunks",
+                "kb_documents",
                 "conversation_memory",
                 "grounded_response_cache",
                 "doc_dedup_signatures",
@@ -565,6 +589,7 @@ class SchemaTests(unittest.TestCase):
             set(first["dropped"]),
             {
                 "kb_chunks",
+                "kb_documents",
                 "conversation_memory",
                 "grounded_response_cache",
                 "doc_dedup_signatures",
@@ -591,6 +616,14 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("sparse_vector_idx", client.indexes["kb_chunks"])
         self.assertIn("chunk_id_idx", client.indexes["kb_chunks"])
         self.assertIn(
+            "passages_element_cosine_idx",
+            client.indexes["kb_documents"],
+        )
+        self.assertIn(
+            "passages_embedding_list_maxsim_idx",
+            client.indexes["kb_documents"],
+        )
+        self.assertIn(
             "minhash_signature_idx",
             client.indexes["doc_dedup_signatures"],
         )
@@ -610,6 +643,28 @@ class SchemaTests(unittest.TestCase):
             set(report["kb_chunks"]["verified"]),
             client.indexes["kb_chunks"],
         )
+
+    def test_timestamptz_uses_stl_sort_not_inverted(self) -> None:
+        requests = {
+            request["field_name"]: request
+            for request in _index_requests(CONVERSATION_MEMORY_INDEXES)
+        }
+
+        self.assertEqual(requests["expires_at"]["index_type"], "STL_SORT")
+        self.assertEqual(requests["session_id"]["index_type"], "INVERTED")
+        with self.assertRaisesRegex(ValueError, "Scalar index definition"):
+            _index_requests({"scalar_indexes": [{"field_name": "expires_at"}]})
+
+    def test_existing_index_type_mismatch_fails_closed(self) -> None:
+        client = ProvisioningMilvusClient()
+        create_collections("unused", client=client)
+        create_indexes("unused", client=client)
+        client.index_descriptions["conversation_memory"]["expires_at_idx"][
+            "index_type"
+        ] = "INVERTED"
+
+        with self.assertRaisesRegex(RuntimeError, "rerun with --recreate"):
+            create_indexes("unused", client=client)
 
 
 if __name__ == "__main__":

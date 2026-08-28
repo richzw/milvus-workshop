@@ -1,0 +1,3222 @@
+{
+  "report_version": "rag-eval-v3",
+  "evaluation": {
+    "mode": "deterministic",
+    "trials_per_question": 1,
+    "top_k": 20,
+    "question_ids": [
+      "q001",
+      "q002",
+      "q003",
+      "q004",
+      "q005",
+      "q006",
+      "q007",
+      "q008",
+      "q009",
+      "q010",
+      "q011",
+      "q012",
+      "q013",
+      "q014",
+      "q015",
+      "q016"
+    ],
+    "grader_layer": "L1_programmatic",
+    "provider_profile": {
+      "classifier": "rule_based",
+      "context_compression": "disabled",
+      "embedding": "deterministic",
+      "generator": "deterministic",
+      "kind": "deterministic",
+      "memory_selector": "rule_based",
+      "query_transformer": "rule_based",
+      "reranker": "rule_based",
+      "text_vector_space": "deterministic:sha256-token-v1:1024"
+    },
+    "dataset_profile": {
+      "corpus_identity": "sha256:1ed45cc07548bb6e6fd2f2a440d70ff5721693c0ce43e62ba0ac9c2444d2145f",
+      "fixture_identity": "sha256:24151876cb52bfa1cd570a090dc93d549a374849934bd6be4e9d181a33bd7b4f",
+      "kind": "offline_seed"
+    },
+    "observed_provider_profile": {
+      "classifier": "rule_based:none",
+      "reranker": "not_run:none,rule-based-reranker:none",
+      "generator": "deterministic:none,not_invoked:none",
+      "memory_selector": "rule_based:none",
+      "query_transformer": "not_reported:none:not_run,rule_based:none:decompose,rule_based:none:identity,rule_based:none:rewrite,rule_based:none:step_back",
+      "context_compressor": "identity:none:disabled,not_reported:none:not_run"
+    }
+  },
+  "runtime": {
+    "python": "3.13.9",
+    "implementation": "CPython",
+    "platform": "Linux",
+    "machine": "x86_64",
+    "processor": "AMD EPYC 7571",
+    "memory_mb": 7834,
+    "byteorder": "little"
+  },
+  "num_questions": 16,
+  "num_trials": 16,
+  "recall_at_k": 1.0,
+  "reranked_recall_at_8": 1.0,
+  "selected_context_recall_at_5": 1.0,
+  "citation_coverage": 1.0,
+  "citation_precision": 0.7458,
+  "citation_resolve_rate": 1.0,
+  "required_fact_coverage": 0.9833,
+  "abstention_accuracy": 1.0,
+  "tool_selection_accuracy": 1.0,
+  "tool_invocation_accuracy": 1.0,
+  "entity_resolution_accuracy": 1.0,
+  "version_scope_accuracy": 1.0,
+  "cross_version_contamination_count": 0,
+  "permission_denial_case_count": 1,
+  "permission_bypass_count": 0,
+  "query_transformation_contract_rate": 1.0,
+  "original_query_retention_rate": 1.0,
+  "step_back_primary_coverage": 1.0,
+  "context_compression_provenance_rate": 1.0,
+  "context_compression_reduction_ratio": 0.0,
+  "context_compression_fallback_rate": 0.0,
+  "enough_evidence_rate": 0.625,
+  "cases": [
+    {
+      "question_id": "q001",
+      "category": "architecture",
+      "expected_sources": [
+        "doc_rag_arch_v1_p003_c002",
+        "doc_s3_sync_design_c003"
+      ],
+      "required_facts": [
+        "bucket scanning",
+        "change detection",
+        "document parsing",
+        "chunking",
+        "embedding generation",
+        "Milvus insertion"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_code_docs"
+      ],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 0.6667,
+      "required_fact_coverage": 0.8333,
+      "latency_ms": 14.9105,
+      "retrieval_latency_ms": 1.573,
+      "rerank_latency_ms": 0.217,
+      "generation_latency_ms": 0.06,
+      "time_to_first_token_ms": 6.8541,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": false
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": [
+          "required_fact_missing"
+        ]
+      },
+      "first_failure_layer": "outcome",
+      "case_passed": false,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q001",
+          "trial": 1,
+          "category": "architecture",
+          "expected_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "recalled_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "reranked_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "selected_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "cited_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "expected_recalled_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "expected_reranked_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "expected_selected_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "expected_cited_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 0.6667,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "bucket scanning",
+            "change detection",
+            "document parsing",
+            "chunking",
+            "embedding generation",
+            "Milvus insertion"
+          ],
+          "matched_facts": [
+            "bucket scanning",
+            "document parsing",
+            "chunking",
+            "embedding generation",
+            "Milvus insertion"
+          ],
+          "required_fact_coverage": 0.8333,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_code_docs"
+          ],
+          "selected_tools": [
+            "search_code_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": false
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": [
+              "required_fact_missing"
+            ]
+          },
+          "first_failure_layer": "outcome",
+          "case_passed": false,
+          "latency_ms": 14.9105,
+          "retrieval_latency_ms": 1.573,
+          "rerank_latency_ms": 0.217,
+          "generation_latency_ms": 0.06,
+          "time_to_first_token_ms": 6.8541,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:identity",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q002",
+      "category": "architecture",
+      "expected_sources": [
+        "doc_milvus_feature_map_c001"
+      ],
+      "required_facts": [
+        "hybrid retrieval",
+        "text vector",
+        "sparse vector",
+        "metadata filter",
+        "order by"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_code_docs"
+      ],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 0.2,
+      "required_fact_coverage": 1.0,
+      "latency_ms": 13.3831,
+      "retrieval_latency_ms": 1.257,
+      "rerank_latency_ms": 0.161,
+      "generation_latency_ms": 0.073,
+      "time_to_first_token_ms": 5.9626,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q002",
+          "trial": 1,
+          "category": "architecture",
+          "expected_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "recalled_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "reranked_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "selected_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "cited_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "expected_recalled_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "expected_reranked_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "expected_selected_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "expected_cited_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 0.2,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "hybrid retrieval",
+            "text vector",
+            "sparse vector",
+            "metadata filter",
+            "order by"
+          ],
+          "matched_facts": [
+            "hybrid retrieval",
+            "text vector",
+            "sparse vector",
+            "metadata filter",
+            "order by"
+          ],
+          "required_fact_coverage": 1.0,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_code_docs"
+          ],
+          "selected_tools": [
+            "search_code_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 13.3831,
+          "retrieval_latency_ms": 1.257,
+          "rerank_latency_ms": 0.161,
+          "generation_latency_ms": 0.073,
+          "time_to_first_token_ms": 5.9626,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:identity",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q003",
+      "category": "unknown",
+      "expected_sources": [],
+      "required_facts": [],
+      "should_abstain": true,
+      "expected_tools": [
+        "search_code_docs"
+      ],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": null,
+      "reranked_recall_at_8": null,
+      "selected_context_recall_at_5": null,
+      "citation_coverage": null,
+      "citation_precision": 1.0,
+      "required_fact_coverage": null,
+      "latency_ms": 12.4887,
+      "retrieval_latency_ms": 2.709,
+      "rerank_latency_ms": 0.147,
+      "generation_latency_ms": 0.004,
+      "time_to_first_token_ms": 6.912,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "abstained"
+      ],
+      "trials": [
+        {
+          "question_id": "q003",
+          "trial": 1,
+          "category": "unknown",
+          "expected_sources": [],
+          "recalled_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "reranked_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "selected_sources": [],
+          "cited_sources": [],
+          "expected_recalled_sources": [],
+          "expected_reranked_sources": [],
+          "expected_selected_sources": [],
+          "expected_cited_sources": [],
+          "recall_at_k": null,
+          "reranked_recall_at_8": null,
+          "selected_context_recall_at_5": null,
+          "citation_coverage": null,
+          "citation_precision": 1.0,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [],
+          "matched_facts": [],
+          "required_fact_coverage": null,
+          "should_abstain": true,
+          "did_abstain": true,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_code_docs"
+          ],
+          "selected_tools": [
+            "search_code_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": false,
+          "citation_hit": false,
+          "enough_evidence": false,
+          "terminal_status": "abstained",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 12.4887,
+          "retrieval_latency_ms": 2.709,
+          "rerank_latency_ms": 0.147,
+          "generation_latency_ms": 0.004,
+          "time_to_first_token_ms": 6.912,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "not_invoked:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:rewrite",
+            "context_compressor": "not_reported:none:not_run"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": null,
+          "context_compression_reduction_ratio": null,
+          "context_compression_fallback": null
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q004",
+      "category": "comparison",
+      "expected_sources": [
+        "doc_customer_meeting_notes_c001",
+        "doc_product_roadmap_c001"
+      ],
+      "required_facts": [
+        "data freshness",
+        "citation",
+        "Agent trace",
+        "permission",
+        "production ACL"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_meeting_notes",
+        "search_product_docs"
+      ],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 1.0,
+      "required_fact_coverage": 1.0,
+      "latency_ms": 16.104,
+      "retrieval_latency_ms": 3.761,
+      "rerank_latency_ms": 0.186,
+      "generation_latency_ms": 0.04,
+      "time_to_first_token_ms": 8.0842,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q004",
+          "trial": 1,
+          "category": "comparison",
+          "expected_sources": [
+            "doc_customer_meeting_notes_c001",
+            "doc_product_roadmap_c001"
+          ],
+          "recalled_sources": [
+            "doc_agent_ui_mvp_c001",
+            "doc_customer_meeting_notes_c001",
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002",
+            "doc_product_roadmap_c001"
+          ],
+          "reranked_sources": [
+            "doc_agent_ui_mvp_c001",
+            "doc_customer_meeting_notes_c001",
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002",
+            "doc_product_roadmap_c001"
+          ],
+          "selected_sources": [
+            "doc_customer_meeting_notes_c001",
+            "doc_product_roadmap_c001"
+          ],
+          "cited_sources": [
+            "doc_customer_meeting_notes_c001",
+            "doc_product_roadmap_c001"
+          ],
+          "expected_recalled_sources": [
+            "doc_customer_meeting_notes_c001",
+            "doc_product_roadmap_c001"
+          ],
+          "expected_reranked_sources": [
+            "doc_customer_meeting_notes_c001",
+            "doc_product_roadmap_c001"
+          ],
+          "expected_selected_sources": [
+            "doc_customer_meeting_notes_c001",
+            "doc_product_roadmap_c001"
+          ],
+          "expected_cited_sources": [
+            "doc_customer_meeting_notes_c001",
+            "doc_product_roadmap_c001"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 1.0,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "data freshness",
+            "citation",
+            "Agent trace",
+            "permission",
+            "production ACL"
+          ],
+          "matched_facts": [
+            "data freshness",
+            "citation",
+            "Agent trace",
+            "permission",
+            "production ACL"
+          ],
+          "required_fact_coverage": 1.0,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_meeting_notes",
+            "search_product_docs"
+          ],
+          "selected_tools": [
+            "search_meeting_notes",
+            "search_product_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 16.104,
+          "retrieval_latency_ms": 3.761,
+          "rerank_latency_ms": 0.186,
+          "generation_latency_ms": 0.04,
+          "time_to_first_token_ms": 8.0842,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:identity",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q005",
+      "category": "terminology",
+      "expected_sources": [
+        "doc_go_button_guide_v2_c001",
+        "doc_go_button_guide_v2_c002"
+      ],
+      "required_facts": [
+        "直接领取",
+        "活动详情页"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_product_docs"
+      ],
+      "expected_entities": [
+        "ui.go_button"
+      ],
+      "expected_version_scope": "current",
+      "expected_doc_versions": [],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 1.0,
+      "required_fact_coverage": 1.0,
+      "latency_ms": 11.8312,
+      "retrieval_latency_ms": 1.403,
+      "rerank_latency_ms": 0.161,
+      "generation_latency_ms": 0.039,
+      "time_to_first_token_ms": 5.5013,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q005",
+          "trial": 1,
+          "category": "terminology",
+          "expected_sources": [
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "recalled_sources": [
+            "doc_agent_ui_mvp_c001",
+            "doc_customer_meeting_notes_c001",
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002",
+            "doc_product_roadmap_c001"
+          ],
+          "reranked_sources": [
+            "doc_agent_ui_mvp_c001",
+            "doc_customer_meeting_notes_c001",
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002",
+            "doc_product_roadmap_c001"
+          ],
+          "selected_sources": [
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "cited_sources": [
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "expected_recalled_sources": [
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "expected_reranked_sources": [
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "expected_selected_sources": [
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "expected_cited_sources": [
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 1.0,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "直接领取",
+            "活动详情页"
+          ],
+          "matched_facts": [
+            "直接领取",
+            "活动详情页"
+          ],
+          "required_fact_coverage": 1.0,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_product_docs"
+          ],
+          "selected_tools": [
+            "search_product_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [
+            "ui.go_button"
+          ],
+          "matched_entities": [
+            "ui.go_button"
+          ],
+          "entity_resolution_correct": true,
+          "expected_version_scope": "current",
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": true,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 11.8312,
+          "retrieval_latency_ms": 1.403,
+          "rerank_latency_ms": 0.161,
+          "generation_latency_ms": 0.039,
+          "time_to_first_token_ms": 5.5013,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:rewrite",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q006",
+      "category": "terminology",
+      "expected_sources": [
+        "doc_go_button_guide_v1_c001",
+        "doc_go_button_guide_v1_c002"
+      ],
+      "required_facts": [
+        "页面跳转",
+        "再次确认"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_product_docs"
+      ],
+      "expected_entities": [
+        "ui.go_button"
+      ],
+      "expected_version_scope": "exact",
+      "expected_doc_versions": [
+        "v1"
+      ],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 1.0,
+      "required_fact_coverage": 1.0,
+      "latency_ms": 10.2391,
+      "retrieval_latency_ms": 1.344,
+      "rerank_latency_ms": 0.305,
+      "generation_latency_ms": 0.058,
+      "time_to_first_token_ms": 5.8947,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q006",
+          "trial": 1,
+          "category": "terminology",
+          "expected_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002"
+          ],
+          "recalled_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002"
+          ],
+          "reranked_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002"
+          ],
+          "selected_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002"
+          ],
+          "cited_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002"
+          ],
+          "expected_recalled_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002"
+          ],
+          "expected_reranked_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002"
+          ],
+          "expected_selected_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002"
+          ],
+          "expected_cited_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 1.0,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "页面跳转",
+            "再次确认"
+          ],
+          "matched_facts": [
+            "页面跳转",
+            "再次确认"
+          ],
+          "required_fact_coverage": 1.0,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_product_docs"
+          ],
+          "selected_tools": [
+            "search_product_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [
+            "ui.go_button"
+          ],
+          "matched_entities": [
+            "ui.go_button"
+          ],
+          "entity_resolution_correct": true,
+          "expected_version_scope": "exact",
+          "actual_version_scope": "exact",
+          "expected_doc_versions": [
+            "v1"
+          ],
+          "actual_doc_versions": [
+            "v1"
+          ],
+          "version_scope_correct": true,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 10.2391,
+          "retrieval_latency_ms": 1.344,
+          "rerank_latency_ms": 0.305,
+          "generation_latency_ms": 0.058,
+          "time_to_first_token_ms": 5.8947,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:rewrite",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q007",
+      "category": "version_comparison",
+      "expected_sources": [
+        "doc_go_button_guide_v1_c001",
+        "doc_go_button_guide_v2_c001"
+      ],
+      "required_facts": [
+        "v1",
+        "v2",
+        "直接领取",
+        "跳转"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_product_docs"
+      ],
+      "expected_entities": [
+        "ui.go_button"
+      ],
+      "expected_version_scope": "comparison",
+      "expected_doc_versions": [
+        "v1",
+        "v2"
+      ],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 0.5,
+      "required_fact_coverage": 1.0,
+      "latency_ms": 13.1054,
+      "retrieval_latency_ms": 2.68,
+      "rerank_latency_ms": 0.165,
+      "generation_latency_ms": 0.046,
+      "time_to_first_token_ms": 7.0896,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q007",
+          "trial": 1,
+          "category": "version_comparison",
+          "expected_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v2_c001"
+          ],
+          "recalled_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002",
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "reranked_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002",
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "selected_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002",
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "cited_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v1_c002",
+            "doc_go_button_guide_v2_c001",
+            "doc_go_button_guide_v2_c002"
+          ],
+          "expected_recalled_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v2_c001"
+          ],
+          "expected_reranked_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v2_c001"
+          ],
+          "expected_selected_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v2_c001"
+          ],
+          "expected_cited_sources": [
+            "doc_go_button_guide_v1_c001",
+            "doc_go_button_guide_v2_c001"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 0.5,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "v1",
+            "v2",
+            "直接领取",
+            "跳转"
+          ],
+          "matched_facts": [
+            "v1",
+            "v2",
+            "直接领取",
+            "跳转"
+          ],
+          "required_fact_coverage": 1.0,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_product_docs"
+          ],
+          "selected_tools": [
+            "search_product_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [
+            "ui.go_button"
+          ],
+          "matched_entities": [
+            "ui.go_button"
+          ],
+          "entity_resolution_correct": true,
+          "expected_version_scope": "comparison",
+          "actual_version_scope": "comparison",
+          "expected_doc_versions": [
+            "v1",
+            "v2"
+          ],
+          "actual_doc_versions": [
+            "v1",
+            "v2"
+          ],
+          "version_scope_correct": true,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 13.1054,
+          "retrieval_latency_ms": 2.68,
+          "rerank_latency_ms": 0.165,
+          "generation_latency_ms": 0.046,
+          "time_to_first_token_ms": 7.0896,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:decompose",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q008",
+      "category": "permission_denial",
+      "expected_sources": [],
+      "required_facts": [],
+      "should_abstain": false,
+      "expected_tools": [],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": null,
+      "reranked_recall_at_8": null,
+      "selected_context_recall_at_5": null,
+      "citation_coverage": null,
+      "citation_precision": 1.0,
+      "required_fact_coverage": null,
+      "latency_ms": 3.1745,
+      "retrieval_latency_ms": 0.0,
+      "rerank_latency_ms": 0.0,
+      "generation_latency_ms": 0.0,
+      "time_to_first_token_ms": null,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "permission_denied"
+      ],
+      "trials": [
+        {
+          "question_id": "q008",
+          "trial": 1,
+          "category": "permission_denial",
+          "expected_sources": [],
+          "recalled_sources": [],
+          "reranked_sources": [],
+          "selected_sources": [],
+          "cited_sources": [],
+          "expected_recalled_sources": [],
+          "expected_reranked_sources": [],
+          "expected_selected_sources": [],
+          "expected_cited_sources": [],
+          "recall_at_k": null,
+          "reranked_recall_at_8": null,
+          "selected_context_recall_at_5": null,
+          "citation_coverage": null,
+          "citation_precision": 1.0,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [],
+          "matched_facts": [],
+          "required_fact_coverage": null,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [],
+          "selected_tools": [],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": true,
+          "permission_bypass_count": 0,
+          "recall_hit": false,
+          "citation_hit": false,
+          "enough_evidence": false,
+          "terminal_status": "permission_denied",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 3.1745,
+          "retrieval_latency_ms": 0.0,
+          "rerank_latency_ms": 0.0,
+          "generation_latency_ms": 0.0,
+          "time_to_first_token_ms": null,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "not_run:none",
+            "generator": "not_invoked:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "not_reported:none:not_run",
+            "context_compressor": "not_reported:none:not_run"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": null,
+          "original_query_retained": null,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": null,
+          "context_compression_reduction_ratio": null,
+          "context_compression_fallback": null
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q009",
+      "category": "architecture",
+      "expected_sources": [
+        "doc_rag_arch_v1_p003_c002",
+        "doc_s3_sync_design_c003"
+      ],
+      "required_facts": [
+        "chunking",
+        "embedding"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_code_docs"
+      ],
+      "expected_entities": [],
+      "expected_version_scope": "current",
+      "expected_doc_versions": [],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 0.6667,
+      "required_fact_coverage": 1.0,
+      "latency_ms": 17.0168,
+      "retrieval_latency_ms": 3.294,
+      "rerank_latency_ms": 0.192,
+      "generation_latency_ms": 0.072,
+      "time_to_first_token_ms": 7.6619,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q009",
+          "trial": 1,
+          "category": "architecture",
+          "expected_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "recalled_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "reranked_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "selected_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "cited_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "expected_recalled_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "expected_reranked_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "expected_selected_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "expected_cited_sources": [
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 0.6667,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "chunking",
+            "embedding"
+          ],
+          "matched_facts": [
+            "chunking",
+            "embedding"
+          ],
+          "required_fact_coverage": 1.0,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_code_docs"
+          ],
+          "selected_tools": [
+            "search_code_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": "current",
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": true,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 17.0168,
+          "retrieval_latency_ms": 3.294,
+          "rerank_latency_ms": 0.192,
+          "generation_latency_ms": 0.072,
+          "time_to_first_token_ms": 7.6619,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:step_back",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": true,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q010",
+      "category": "terminology",
+      "expected_sources": [],
+      "required_facts": [],
+      "should_abstain": false,
+      "expected_tools": [],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": null,
+      "reranked_recall_at_8": null,
+      "selected_context_recall_at_5": null,
+      "citation_coverage": null,
+      "citation_precision": 1.0,
+      "required_fact_coverage": null,
+      "latency_ms": 3.3534,
+      "retrieval_latency_ms": 0.0,
+      "rerank_latency_ms": 0.0,
+      "generation_latency_ms": 0.0,
+      "time_to_first_token_ms": null,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "clarification_required"
+      ],
+      "trials": [
+        {
+          "question_id": "q010",
+          "trial": 1,
+          "category": "terminology",
+          "expected_sources": [],
+          "recalled_sources": [],
+          "reranked_sources": [],
+          "selected_sources": [],
+          "cited_sources": [],
+          "expected_recalled_sources": [],
+          "expected_reranked_sources": [],
+          "expected_selected_sources": [],
+          "expected_cited_sources": [],
+          "recall_at_k": null,
+          "reranked_recall_at_8": null,
+          "selected_context_recall_at_5": null,
+          "citation_coverage": null,
+          "citation_precision": 1.0,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [],
+          "matched_facts": [],
+          "required_fact_coverage": null,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [],
+          "selected_tools": [],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": false,
+          "citation_hit": false,
+          "enough_evidence": false,
+          "terminal_status": "clarification_required",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 3.3534,
+          "retrieval_latency_ms": 0.0,
+          "rerank_latency_ms": 0.0,
+          "generation_latency_ms": 0.0,
+          "time_to_first_token_ms": null,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "not_run:none",
+            "generator": "not_invoked:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "not_reported:none:not_run",
+            "context_compressor": "not_reported:none:not_run"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": null,
+          "original_query_retained": null,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": null,
+          "context_compression_reduction_ratio": null,
+          "context_compression_fallback": null
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q011",
+      "category": "product_version",
+      "expected_sources": [
+        "doc_milvus_feature_map_c002"
+      ],
+      "required_facts": [
+        "Force Merge",
+        "segments"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_code_docs"
+      ],
+      "expected_entities": [],
+      "expected_version_scope": "exact",
+      "expected_doc_versions": [
+        "v3.0"
+      ],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 0.5,
+      "required_fact_coverage": 1.0,
+      "latency_ms": 9.3522,
+      "retrieval_latency_ms": 0.763,
+      "rerank_latency_ms": 0.109,
+      "generation_latency_ms": 0.04,
+      "time_to_first_token_ms": 4.6862,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q011",
+          "trial": 1,
+          "category": "product_version",
+          "expected_sources": [
+            "doc_milvus_feature_map_c002"
+          ],
+          "recalled_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "reranked_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "selected_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "cited_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "expected_recalled_sources": [
+            "doc_milvus_feature_map_c002"
+          ],
+          "expected_reranked_sources": [
+            "doc_milvus_feature_map_c002"
+          ],
+          "expected_selected_sources": [
+            "doc_milvus_feature_map_c002"
+          ],
+          "expected_cited_sources": [
+            "doc_milvus_feature_map_c002"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 0.5,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "Force Merge",
+            "segments"
+          ],
+          "matched_facts": [
+            "Force Merge",
+            "segments"
+          ],
+          "required_fact_coverage": 1.0,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_code_docs"
+          ],
+          "selected_tools": [
+            "search_code_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": "exact",
+          "actual_version_scope": "exact",
+          "expected_doc_versions": [
+            "v3.0"
+          ],
+          "actual_doc_versions": [
+            "v3.0"
+          ],
+          "version_scope_correct": true,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 9.3522,
+          "retrieval_latency_ms": 0.763,
+          "rerank_latency_ms": 0.109,
+          "generation_latency_ms": 0.04,
+          "time_to_first_token_ms": 4.6862,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:identity",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q012",
+      "category": "exhaustive",
+      "expected_sources": [
+        "doc_milvus_feature_map_c001",
+        "doc_milvus_feature_map_c002"
+      ],
+      "required_facts": [
+        "Force Merge",
+        "sparse_vector"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_code_docs"
+      ],
+      "expected_entities": [],
+      "expected_version_scope": "exact",
+      "expected_doc_versions": [
+        "v3.0"
+      ],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 1.0,
+      "required_fact_coverage": 1.0,
+      "latency_ms": 9.2339,
+      "retrieval_latency_ms": 0.868,
+      "rerank_latency_ms": 0.108,
+      "generation_latency_ms": 0.04,
+      "time_to_first_token_ms": 4.753,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q012",
+          "trial": 1,
+          "category": "exhaustive",
+          "expected_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "recalled_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "reranked_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "selected_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "cited_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "expected_recalled_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "expected_reranked_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "expected_selected_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "expected_cited_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 1.0,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "Force Merge",
+            "sparse_vector"
+          ],
+          "matched_facts": [
+            "Force Merge",
+            "sparse_vector"
+          ],
+          "required_fact_coverage": 1.0,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_code_docs"
+          ],
+          "selected_tools": [
+            "search_code_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": "exact",
+          "actual_version_scope": "exact",
+          "expected_doc_versions": [
+            "v3.0"
+          ],
+          "actual_doc_versions": [
+            "v3.0"
+          ],
+          "version_scope_correct": true,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 9.2339,
+          "retrieval_latency_ms": 0.868,
+          "rerank_latency_ms": 0.108,
+          "generation_latency_ms": 0.04,
+          "time_to_first_token_ms": 4.753,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:identity",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q013",
+      "category": "policy",
+      "expected_sources": [],
+      "required_facts": [],
+      "should_abstain": true,
+      "expected_tools": [
+        "search_policy_docs"
+      ],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": null,
+      "reranked_recall_at_8": null,
+      "selected_context_recall_at_5": null,
+      "citation_coverage": null,
+      "citation_precision": 1.0,
+      "required_fact_coverage": null,
+      "latency_ms": 8.865,
+      "retrieval_latency_ms": 1.494,
+      "rerank_latency_ms": 0.085,
+      "generation_latency_ms": 0.004,
+      "time_to_first_token_ms": 4.9598,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "abstained"
+      ],
+      "trials": [
+        {
+          "question_id": "q013",
+          "trial": 1,
+          "category": "policy",
+          "expected_sources": [],
+          "recalled_sources": [
+            "doc_ttl_memory_policy_c001"
+          ],
+          "reranked_sources": [
+            "doc_ttl_memory_policy_c001"
+          ],
+          "selected_sources": [],
+          "cited_sources": [],
+          "expected_recalled_sources": [],
+          "expected_reranked_sources": [],
+          "expected_selected_sources": [],
+          "expected_cited_sources": [],
+          "recall_at_k": null,
+          "reranked_recall_at_8": null,
+          "selected_context_recall_at_5": null,
+          "citation_coverage": null,
+          "citation_precision": 1.0,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [],
+          "matched_facts": [],
+          "required_fact_coverage": null,
+          "should_abstain": true,
+          "did_abstain": true,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_policy_docs"
+          ],
+          "selected_tools": [
+            "search_policy_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": false,
+          "citation_hit": false,
+          "enough_evidence": false,
+          "terminal_status": "abstained",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 8.865,
+          "retrieval_latency_ms": 1.494,
+          "rerank_latency_ms": 0.085,
+          "generation_latency_ms": 0.004,
+          "time_to_first_token_ms": 4.9598,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "not_invoked:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:identity",
+            "context_compressor": "not_reported:none:not_run"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": null,
+          "context_compression_reduction_ratio": null,
+          "context_compression_fallback": null
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q014",
+      "category": "response_cache",
+      "expected_sources": [
+        "doc_milvus_feature_map_c001"
+      ],
+      "required_facts": [],
+      "should_abstain": false,
+      "expected_tools": [],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": null,
+      "reranked_recall_at_8": null,
+      "selected_context_recall_at_5": null,
+      "citation_coverage": 1.0,
+      "citation_precision": 0.2,
+      "required_fact_coverage": null,
+      "latency_ms": 5.5173,
+      "retrieval_latency_ms": 0.0,
+      "rerank_latency_ms": 0.0,
+      "generation_latency_ms": 0.0,
+      "time_to_first_token_ms": 1.7518,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered_from_cache"
+      ],
+      "trials": [
+        {
+          "question_id": "q014",
+          "trial": 1,
+          "category": "response_cache",
+          "expected_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "recalled_sources": [],
+          "reranked_sources": [],
+          "selected_sources": [],
+          "cited_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "expected_recalled_sources": [],
+          "expected_reranked_sources": [],
+          "expected_selected_sources": [],
+          "expected_cited_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "recall_at_k": null,
+          "reranked_recall_at_8": null,
+          "selected_context_recall_at_5": null,
+          "citation_coverage": 1.0,
+          "citation_precision": 0.2,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [],
+          "matched_facts": [],
+          "required_fact_coverage": null,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [],
+          "selected_tools": [],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": false,
+          "citation_hit": true,
+          "enough_evidence": false,
+          "terminal_status": "answered_from_cache",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 5.5173,
+          "retrieval_latency_ms": 0.0,
+          "rerank_latency_ms": 0.0,
+          "generation_latency_ms": 0.0,
+          "time_to_first_token_ms": 1.7518,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "not_run:none",
+            "generator": "not_invoked:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "not_reported:none:not_run",
+            "context_compressor": "not_reported:none:not_run"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": null,
+          "original_query_retained": null,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": null,
+          "context_compression_reduction_ratio": null,
+          "context_compression_fallback": null
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q015",
+      "category": "memory_recall",
+      "expected_sources": [],
+      "required_facts": [],
+      "should_abstain": false,
+      "expected_tools": [],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": null,
+      "reranked_recall_at_8": null,
+      "selected_context_recall_at_5": null,
+      "citation_coverage": null,
+      "citation_precision": 1.0,
+      "required_fact_coverage": null,
+      "latency_ms": 6.6174,
+      "retrieval_latency_ms": 0.0,
+      "rerank_latency_ms": 0.0,
+      "generation_latency_ms": 0.0,
+      "time_to_first_token_ms": null,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered_from_memory"
+      ],
+      "trials": [
+        {
+          "question_id": "q015",
+          "trial": 1,
+          "category": "memory_recall",
+          "expected_sources": [],
+          "recalled_sources": [],
+          "reranked_sources": [],
+          "selected_sources": [],
+          "cited_sources": [],
+          "expected_recalled_sources": [],
+          "expected_reranked_sources": [],
+          "expected_selected_sources": [],
+          "expected_cited_sources": [],
+          "recall_at_k": null,
+          "reranked_recall_at_8": null,
+          "selected_context_recall_at_5": null,
+          "citation_coverage": null,
+          "citation_precision": 1.0,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [],
+          "matched_facts": [],
+          "required_fact_coverage": null,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [],
+          "selected_tools": [],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": false,
+          "citation_hit": false,
+          "enough_evidence": false,
+          "terminal_status": "answered_from_memory",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 6.6174,
+          "retrieval_latency_ms": 0.0,
+          "rerank_latency_ms": 0.0,
+          "generation_latency_ms": 0.0,
+          "time_to_first_token_ms": null,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "not_run:none",
+            "generator": "not_invoked:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "not_reported:none:not_run",
+            "context_compressor": "not_reported:none:not_run"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": null,
+          "original_query_retained": null,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": null,
+          "context_compression_reduction_ratio": null,
+          "context_compression_fallback": null
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    },
+    {
+      "question_id": "q016",
+      "category": "reranker_fallback",
+      "expected_sources": [
+        "doc_milvus_feature_map_c001"
+      ],
+      "required_facts": [
+        "hybrid retrieval"
+      ],
+      "should_abstain": false,
+      "expected_tools": [
+        "search_code_docs"
+      ],
+      "expected_entities": [],
+      "expected_version_scope": null,
+      "expected_doc_versions": [],
+      "recall_at_k": 1.0,
+      "reranked_recall_at_8": 1.0,
+      "selected_context_recall_at_5": 1.0,
+      "citation_coverage": 1.0,
+      "citation_precision": 0.2,
+      "required_fact_coverage": 1.0,
+      "latency_ms": 15.0926,
+      "retrieval_latency_ms": 1.357,
+      "rerank_latency_ms": 0.206,
+      "generation_latency_ms": 0.062,
+      "time_to_first_token_ms": 7.8882,
+      "layer_results": {
+        "trajectory": true,
+        "tool": true,
+        "outcome": true
+      },
+      "failure_reasons": {
+        "trajectory": [],
+        "tool": [],
+        "outcome": []
+      },
+      "first_failure_layer": null,
+      "case_passed": true,
+      "terminal_statuses": [
+        "answered"
+      ],
+      "trials": [
+        {
+          "question_id": "q016",
+          "trial": 1,
+          "category": "reranker_fallback",
+          "expected_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "recalled_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "reranked_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "selected_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "cited_sources": [
+            "doc_milvus_feature_map_c001",
+            "doc_milvus_feature_map_c002",
+            "doc_rag_arch_v1_p003_c002",
+            "doc_s3_sync_design_c003",
+            "img_s3_sync_flow"
+          ],
+          "expected_recalled_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "expected_reranked_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "expected_selected_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "expected_cited_sources": [
+            "doc_milvus_feature_map_c001"
+          ],
+          "recall_at_k": 1.0,
+          "reranked_recall_at_8": 1.0,
+          "selected_context_recall_at_5": 1.0,
+          "citation_coverage": 1.0,
+          "citation_precision": 0.2,
+          "citation_subset_valid": true,
+          "selected_context_bound_valid": true,
+          "required_facts": [
+            "hybrid retrieval"
+          ],
+          "matched_facts": [
+            "hybrid retrieval"
+          ],
+          "required_fact_coverage": 1.0,
+          "should_abstain": false,
+          "did_abstain": false,
+          "abstention_correct": true,
+          "expected_tools": [
+            "search_code_docs"
+          ],
+          "selected_tools": [
+            "search_code_docs"
+          ],
+          "tool_selection_correct": true,
+          "tool_invocation_correct": true,
+          "tool_structural_correct": true,
+          "expected_entities": [],
+          "matched_entities": [],
+          "entity_resolution_correct": null,
+          "expected_version_scope": null,
+          "actual_version_scope": "current",
+          "expected_doc_versions": [],
+          "actual_doc_versions": [],
+          "version_scope_correct": null,
+          "cross_version_contamination_count": 0,
+          "permission_guardrail_applicable": false,
+          "permission_bypass_count": 0,
+          "recall_hit": true,
+          "citation_hit": true,
+          "enough_evidence": true,
+          "terminal_status": "answered",
+          "layer_results": {
+            "trajectory": true,
+            "tool": true,
+            "outcome": true
+          },
+          "failure_reasons": {
+            "trajectory": [],
+            "tool": [],
+            "outcome": []
+          },
+          "first_failure_layer": null,
+          "case_passed": true,
+          "latency_ms": 15.0926,
+          "retrieval_latency_ms": 1.357,
+          "rerank_latency_ms": 0.206,
+          "generation_latency_ms": 0.062,
+          "time_to_first_token_ms": 7.8882,
+          "provider_observations": {
+            "classifier": "rule_based:none",
+            "reranker": "rule-based-reranker:none",
+            "generator": "deterministic:none",
+            "memory_selector": "rule_based:none",
+            "query_transformer": "rule_based:none:identity",
+            "context_compressor": "identity:none:disabled"
+          },
+          "provider_call_count": null,
+          "input_tokens": null,
+          "output_tokens": null,
+          "estimated_cost": null,
+          "cost_profile": null,
+          "query_transformation_contract_valid": true,
+          "original_query_retained": true,
+          "step_back_primary_present": null,
+          "context_compression_provenance_valid": true,
+          "context_compression_reduction_ratio": 0.0,
+          "context_compression_fallback": false
+        }
+      ],
+      "trial_count": 1,
+      "pass_at_k": null,
+      "pass_power_k": null
+    }
+  ],
+  "dimensions": {
+    "trajectory": {
+      "contract_pass_rate": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      }
+    },
+    "tool": {
+      "invocation_accuracy": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "selection_accuracy": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "structural_accuracy": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "entity_resolution_accuracy": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "version_scope_accuracy": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "query_transformation_contract_rate": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "original_query_retention_rate": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "step_back_primary_coverage": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      }
+    },
+    "outcome": {
+      "case_pass_rate": {
+        "grader": "L1_programmatic",
+        "value": 0.9375
+      },
+      "retrieval_recall_at_k": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "reranked_recall_at_8": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "selected_context_recall_at_5": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "citation_coverage": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "citation_precision": {
+        "grader": "L1_programmatic",
+        "value": 0.7458
+      },
+      "required_fact_coverage": {
+        "grader": "L1_programmatic",
+        "value": 0.9833
+      },
+      "abstention_accuracy": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "cross_version_contamination_count": {
+        "grader": "L1_programmatic",
+        "value": 0
+      },
+      "context_compression_provenance_rate": {
+        "grader": "L1_programmatic",
+        "value": 1.0
+      },
+      "context_compression_reduction_ratio": {
+        "grader": "L1_programmatic",
+        "value": 0.0
+      },
+      "context_compression_fallback_rate": {
+        "grader": "L1_programmatic",
+        "value": 0.0
+      }
+    }
+  },
+  "reliability": {
+    "trials_per_question": 1,
+    "pass_at_k": null,
+    "pass_power_k": null,
+    "gate_metric": "deterministic_case_pass"
+  },
+  "latency": {
+    "latency_ms": {
+      "sample_count": 16,
+      "expected_sample_count": 16,
+      "complete": true,
+      "median": 11.0352,
+      "p95": 16.104
+    },
+    "retrieval_latency_ms": {
+      "sample_count": 16,
+      "expected_sample_count": 16,
+      "complete": true,
+      "median": 1.3505,
+      "p95": 3.294
+    },
+    "rerank_latency_ms": {
+      "sample_count": 16,
+      "expected_sample_count": 16,
+      "complete": true,
+      "median": 0.154,
+      "p95": 0.217
+    },
+    "generation_latency_ms": {
+      "sample_count": 16,
+      "expected_sample_count": 16,
+      "complete": true,
+      "median": 0.04,
+      "p95": 0.072
+    },
+    "time_to_first_token_ms": {
+      "sample_count": 13,
+      "expected_sample_count": 16,
+      "complete": false,
+      "median": null,
+      "p95": null
+    }
+  },
+  "operational": {
+    "profile": {
+      "concurrency": 1,
+      "warmup_trials": 0,
+      "measurement": "sequential_wall_clock"
+    },
+    "run_elapsed_ms": 309.3079,
+    "completed_requests_per_hour": 186222.2104,
+    "provider_calls_per_request": 0.0,
+    "input_tokens_per_request": 0.0,
+    "output_tokens_per_request": 0.0,
+    "cost_per_request": 0.0,
+    "cost_profiles": [
+      "deterministic_offline_non_billable"
+    ]
+  },
+  "transcript_review": {
+    "failed_case_ids": [
+      "q001"
+    ],
+    "first_failure_layer_counts": {
+      "trajectory": 0,
+      "tool": 0,
+      "outcome": 1
+    },
+    "reason_counts": {
+      "trajectory": {},
+      "tool": {},
+      "outcome": {
+        "required_fact_missing": 1
+      }
+    },
+    "reviews": [
+      {
+        "attribution": "scaffold_entanglement",
+        "failure_layer": "outcome",
+        "owner": "workshop-author",
+        "question_id": "q001",
+        "reason_code": "required_fact_missing"
+      }
+    ],
+    "unreviewed_failures": [],
+    "human_attribution_required": false,
+    "allowed_attributions": [
+      "capability_gap",
+      "task_quality",
+      "scaffold_entanglement"
+    ]
+  },
+  "metric_portfolio": {
+    "registry_version": "eval-metric-registry-v1",
+    "registry_checksum": "sha256:3dd3f27e305dc44f845dce6c5f8d033cca542ca55782595ad09de14d7deed34b",
+    "goal": {
+      "goal.required_fact_coverage": {
+        "question": "Did the answer cover the required facts for applicable golden cases?",
+        "source": {
+          "kind": "product_goal",
+          "ref": "specs/00-prd.md#7-success-metrics"
+        },
+        "owner": "answer-quality-owner",
+        "grader_id": "required_fact_coverage",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "aggregate.required_fact_coverage",
+        "value": 0.9833,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "gate",
+          "unit": "ratio",
+          "operator": "gte",
+          "value": 0.9
+        },
+        "decision_status": "pass",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "rollback",
+          "open_investigation"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "per_pr",
+        "retirement_condition": "Review after 90 days at 100% without changing an answer-quality decision."
+      },
+      "goal.retrieval_recall_at_20": {
+        "question": "Did retrieval recall the expected sources in the first 20 results?",
+        "source": {
+          "kind": "product_goal",
+          "ref": "specs/70-quality-and-evaluation.md#40a-initial-active-registry"
+        },
+        "owner": "retrieval-owner",
+        "grader_id": "retrieval_recall_at_20",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "aggregate.recall_at_k",
+        "value": 1.0,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "gate",
+          "unit": "ratio",
+          "operator": "gte",
+          "value": 0.9
+        },
+        "decision_status": "pass",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "reject_change",
+          "open_investigation"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "per_pr",
+        "retirement_condition": "Review after 90 days at 100% without changing a retrieval decision."
+      },
+      "goal.selected_context_recall_at_5": {
+        "question": "Did the first five selected context records retain the required sources?",
+        "source": {
+          "kind": "product_goal",
+          "ref": "specs/70-quality-and-evaluation.md#40a-initial-active-registry"
+        },
+        "owner": "rag-quality-owner",
+        "grader_id": "selected_context_recall_at_5",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "aggregate.selected_context_recall_at_5",
+        "value": 1.0,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "gate",
+          "unit": "ratio",
+          "operator": "gte",
+          "value": 0.9
+        },
+        "decision_status": "pass",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "rollback",
+          "open_investigation"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "per_pr",
+        "retirement_condition": "Review after 90 days at 100% without changing a context-selection decision."
+      }
+    },
+    "guardrail": {
+      "guardrail.abstention_correctness": {
+        "question": "Did every case make the expected answer-versus-abstain decision?",
+        "source": {
+          "kind": "hard_constraint",
+          "ref": "specs/70-quality-and-evaluation.md#41-correctness-gates"
+        },
+        "owner": "answer-quality-owner",
+        "grader_id": "abstention_correctness",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "aggregate.abstention_accuracy",
+        "value": 1.0,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "gate",
+          "unit": "ratio",
+          "operator": "eq",
+          "value": 1.0
+        },
+        "decision_status": "pass",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "block_deploy",
+          "open_investigation"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "per_pr",
+        "retirement_condition": "Retire only when the abstention constraint is formally removed."
+      },
+      "guardrail.citation_resolve_rate": {
+        "question": "Did every trial emit only citations that resolve to its selected context?",
+        "source": {
+          "kind": "hard_constraint",
+          "ref": "specs/70-quality-and-evaluation.md#41-correctness-gates"
+        },
+        "owner": "rag-safety-owner",
+        "grader_id": "citation_resolve_rate",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "aggregate.citation_resolve_rate",
+        "value": 1.0,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "gate",
+          "unit": "ratio",
+          "operator": "eq",
+          "value": 1.0
+        },
+        "decision_status": "pass",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "block_deploy",
+          "rollback"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "per_pr",
+        "retirement_condition": "Retire only when the citation-resolution constraint is formally removed."
+      },
+      "guardrail.cross_version_contamination_count": {
+        "question": "How many non-comparison trials mixed evidence from incompatible document versions?",
+        "source": {
+          "kind": "hard_constraint",
+          "ref": "specs/00-prd.md#7-success-metrics"
+        },
+        "owner": "retrieval-owner",
+        "grader_id": "cross_version_contamination_count",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "aggregate.cross_version_contamination_count",
+        "value": 0,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "gate",
+          "unit": "count",
+          "operator": "eq",
+          "value": 0.0
+        },
+        "decision_status": "pass",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "block_deploy",
+          "rollback"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "per_pr",
+        "retirement_condition": "Retire only when the document-version isolation constraint is formally removed."
+      },
+      "guardrail.permission_bypass_count": {
+        "question": "How many denied trials performed private retrieval before terminating?",
+        "source": {
+          "kind": "hard_constraint",
+          "ref": "specs/70-quality-and-evaluation.md#41-correctness-gates"
+        },
+        "owner": "security-owner",
+        "grader_id": "permission_bypass_count",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "aggregate.permission_bypass_count",
+        "value": 0,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "gate",
+          "unit": "count",
+          "operator": "eq",
+          "value": 0.0
+        },
+        "decision_status": "pass",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "block_deploy",
+          "rollback"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "per_pr",
+        "retirement_condition": "Retire only when the permission-before-retrieval constraint is formally removed."
+      }
+    },
+    "operational": {
+      "operational.completed_requests_per_hour": {
+        "question": "How many requests complete per hour for the fixed sequential evaluation profile?",
+        "source": {
+          "kind": "product_goal",
+          "ref": "specs/70-quality-and-evaluation.md#43-performance"
+        },
+        "owner": "runtime-owner",
+        "grader_id": "completed_requests_per_hour",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "operational.completed_requests_per_hour",
+        "value": 186222.2104,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "baseline_only",
+          "unit": "requests_per_hour"
+        },
+        "decision_status": "observational",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "capacity_review",
+          "open_investigation"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "release",
+        "retirement_condition": "Review after 90 days without informing a throughput or capacity decision."
+      },
+      "operational.cost_per_request": {
+        "question": "What observed or provider-profile estimate is spent per evaluated request?",
+        "source": {
+          "kind": "product_goal",
+          "ref": "specs/70-quality-and-evaluation.md#43-performance"
+        },
+        "owner": "runtime-owner",
+        "grader_id": "cost_per_request",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "operational.cost_per_request",
+        "value": 0.0,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "baseline_only",
+          "unit": "usd_per_request"
+        },
+        "decision_status": "observational",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "capacity_review",
+          "open_investigation"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "release",
+        "retirement_condition": "Review after 90 days without informing a provider or cost decision."
+      },
+      "operational.end_to_end_latency_p95": {
+        "question": "What is the P95 end-to-end latency for the fixed evaluation profile?",
+        "source": {
+          "kind": "product_goal",
+          "ref": "specs/70-quality-and-evaluation.md#43-performance"
+        },
+        "owner": "runtime-owner",
+        "grader_id": "end_to_end_latency_p95",
+        "grader_version": "1",
+        "grader_layer": "L1_programmatic",
+        "dataset_segment": "rag_core",
+        "measurement": "latency.latency_ms.p95",
+        "value": 16.104,
+        "baseline": null,
+        "delta": null,
+        "threshold_or_budget": {
+          "mode": "baseline_only",
+          "unit": "milliseconds"
+        },
+        "decision_status": "observational",
+        "gate_basis": "aggregate",
+        "applicable_trial_count": null,
+        "passing_trial_count": null,
+        "decision_action": [
+          "capacity_review",
+          "open_investigation"
+        ],
+        "cost_class": "near_zero",
+        "run_cadence": "release",
+        "retirement_condition": "Review after 90 days without informing a latency or capacity decision."
+      }
+    },
+    "failed_metrics": [],
+    "incomplete_metrics": []
+  }
+}

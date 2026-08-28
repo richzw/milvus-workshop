@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,9 +16,14 @@ def milvus_timestamp(epoch_ms: int) -> str:
 
 
 def timestamp_literal(epoch_ms: int) -> str:
-    """Return a safely quoted Milvus TIMESTAMPTZ expression literal."""
+    """Return a Milvus TIMESTAMPTZ expression literal.
 
-    return json.dumps(milvus_timestamp(epoch_ms))
+    TIMESTAMPTZ predicates require the ``ISO '...'`` literal form.  A plain
+    quoted ISO string is parsed as VarChar and cannot be compared with a
+    TIMESTAMPTZ field.
+    """
+
+    return f"ISO '{milvus_timestamp(epoch_ms)}'"
 
 
 def epoch_ms_from_milvus(value: Any) -> int:

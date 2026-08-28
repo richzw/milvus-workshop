@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import time
 import unicodedata
 import uuid
 from collections.abc import Callable, Generator, Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import asdict, dataclass, replace
-from typing import Any
+from copy import deepcopy
+from dataclasses import dataclass, fields, replace
+from typing import Any, cast
 
 from agent_workshop_demo.classification import (
     ClassificationRequest,
@@ -20,7 +22,15 @@ from agent_workshop_demo.classification import (
     detect_memory_recall,
     validate_classification_result,
 )
-from agent_workshop_demo.config import DEFAULT_SEARCH_PARAMS
+from agent_workshop_demo.config import (
+    DEFAULT_SEARCH_PARAMS,
+    MAX_EXHAUSTIVE_CONTEXTS,
+)
+from agent_workshop_demo.context_compression import (
+    ContextCompressor,
+    DisabledContextCompressor,
+    validate_compression_run,
+)
 from agent_workshop_demo.embedding import (
     TextEmbeddingError,
     text_embedding_fingerprint,
@@ -74,6 +84,13 @@ from agent_workshop_demo.reranker import (
     RuleBasedReranker,
     validate_rerank_run,
 )
+from agent_workshop_demo.query_transform import (
+    IdentityQueryTransformer,
+    QueryTransformRequest,
+    QueryTransformer,
+    RuleBasedQueryTransformer,
+    validate_transformation,
+)
 from agent_workshop_demo.response_cache import (
     DEFAULT_KB_REVISION,
     DEFAULT_RESPONSE_CACHE_SIMILARITY_THRESHOLD,
@@ -90,6 +107,14 @@ from agent_workshop_demo.response_cache import (
     query_constraints,
 )
 from agent_workshop_demo.retrieval import HybridRetriever, InMemoryHybridRetriever
+from agent_workshop_demo.retrieval_tier import (
+    LEXICAL_ONLY_CATALOG_VERSION,
+    LexicalOnlyRetriever,
+    RetrievalTier,
+    RetrievalTierConfig,
+    SparseSearchRetriever,
+    parse_tier,
+)
 from agent_workshop_demo.sample_data import load_kb_chunks
 from agent_workshop_demo.selective_memory import (
     MemoryPack,
@@ -119,10 +144,8 @@ CLARIFICATION_REQUIRED_RESPONSE = (
     "问题中的领域术语或文档版本存在歧义，请补充具体行业场景或两个版本。"
 )
 RELEVANCE_THRESHOLD = 0.22
-STRONG_SINGLE_EVIDENCE_THRESHOLD = 0.80
 MAX_INITIAL_SUBQUERIES = 3
 MAX_DOCUMENT_EXPANSION_CHUNKS = 20
-MAX_EXHAUSTIVE_CONTEXTS = 16
 DEFAULT_MEMORY_TOP_K = 3
 DEFAULT_MEMORY_TTL_SECONDS = 86_400
 MAX_MEMORY_CONTEXT_CHARS = 2_000
@@ -185,7 +208,21 @@ class _ToolSearchOutcome:
     prepared: _PreparedToolCall
     results: tuple[SearchResult, ...]
     latency_ms: float
+    retrieval_profile: str = "flat_hybrid"
+    capability_status: str = "ready"
+    document_candidates: tuple[dict[str, Any], ...] = ()
 
+
+UNSERIALIZED_STATE_FIELDS = frozenset(
+    {
+        "retrieved_chunks",
+        "reranked_chunks",
+        "response_cache_candidates",
+        "selective_memory_private_values",
+        "generation_contexts",
+        "generation_citation_map",
+    }
+)
 
 CURRENT_VERSION_MARKERS = ("current", "latest", "当前", "最新版")
 VERSION_COMPARISON_MARKERS = ("版本", "edition")
@@ -229,6 +266,7 @@ class AgenticRAGWorkflow:
         "execute_tool_plan",
         "rerank_evidence",
         "evaluate_evidence",
+        "prepare_generation_context",
         "generate_answer_streaming",
         "verify_answer",
         "persist_turn_memory",
@@ -239,7 +277,9 @@ class AgenticRAGWorkflow:
         retriever: HybridRetriever | None = None,
         reranker: Reranker | None = None,
         query_classifier: QueryClassifier | None = None,
+        query_transformer: QueryTransformer | None = None,
         answer_generator: AnswerGenerator | None = None,
+        context_compressor: ContextCompressor | None = None,
         permission_checker: PermissionChecker | None = None,
         entity_catalog: EntityCatalog | None = None,
         memory_store: ConversationMemory | None = None,
@@ -255,6 +295,7 @@ class AgenticRAGWorkflow:
             DEFAULT_RESPONSE_CACHE_SIMILARITY_THRESHOLD
         ),
         kb_revision: str = DEFAULT_KB_REVISION,
+        retrieval_tier: RetrievalTier | str = RetrievalTier.HYBRID_DENSE,
         clock: Callable[[], float] = time.perf_counter,
         wall_clock_ms: Callable[[], int] = utc_now_ms,
     ) -> None:
@@ -270,12 +311,24 @@ class AgenticRAGWorkflow:
             raise ValueError("response_cache_similarity_threshold must be in [0, 1]")
         if not kb_revision.strip() or len(kb_revision) > 128:
             raise ValueError("kb_revision must contain 1..128 characters")
-        self.retriever = retriever or InMemoryHybridRetriever(load_kb_chunks())
+        self.retrieval_tier = RetrievalTierConfig(parse_tier(retrieval_tier))
+        configured_retriever = retriever or InMemoryHybridRetriever(load_kb_chunks())
+        self.retriever = self._tier_retriever(configured_retriever)
         self.reranker = reranker or RuleBasedReranker()
         self.query_classifier = query_classifier or RuleBasedQueryClassifier()
+        self.query_transformer = (
+            query_transformer or RuleBasedQueryTransformer()
+            if self.retrieval_tier.uses_query_transformation
+            else IdentityQueryTransformer()
+        )
         self.answer_generator = answer_generator or DeterministicAnswerGenerator()
+        self.context_compressor = context_compressor or DisabledContextCompressor()
         self.permission_checker = permission_checker or DemoPermissionChecker()
-        self.entity_catalog = entity_catalog or load_entity_catalog()
+        self.entity_catalog = (
+            entity_catalog or load_entity_catalog()
+            if self.retrieval_tier.uses_query_transformation
+            else EntityCatalog(LEXICAL_ONLY_CATALOG_VERSION, ())
+        )
         self.memory_store = memory_store or ConversationMemoryStore(
             now_ms=wall_clock_ms()
         )
@@ -293,6 +346,19 @@ class AgenticRAGWorkflow:
         self.kb_revision = kb_revision
         self._clock = clock
         self._wall_clock_ms = wall_clock_ms
+
+    def _tier_retriever(self, source: HybridRetriever) -> HybridRetriever:
+        """Restrict the adapter to the lanes the selected tier may use."""
+
+        if self.retrieval_tier.uses_dense_lane or isinstance(
+            source,
+            LexicalOnlyRetriever,
+        ):
+            return source
+        return cast(
+            HybridRetriever,
+            LexicalOnlyRetriever(cast(SparseSearchRetriever, source)),
+        )
 
     def run(
         self,
@@ -433,7 +499,12 @@ class AgenticRAGWorkflow:
             reranker_top_k=DEFAULT_SEARCH_PARAMS["reranker_top_k"],
             reranker_name="not_run",
             max_retry=DEFAULT_SEARCH_PARAMS["max_retry"],
-            search_mode=DEFAULT_SEARCH_PARAMS["search_mode"],
+            search_mode=(
+                DEFAULT_SEARCH_PARAMS["search_mode"]
+                if self.retrieval_tier.uses_dense_lane
+                else "lexical"
+            ),
+            retrieval_tier=self.retrieval_tier.tier.value,
             memory_ttl_seconds=self.memory_ttl_seconds,
             response_cache_status=(
                 "miss" if self.response_cache_enabled else "disabled"
@@ -627,10 +698,23 @@ class AgenticRAGWorkflow:
                 ).next_node
                 continue
 
-            if current_node is not WorkflowNode.EXECUTE_TOOL_PLAN:
-                raise RuntimeError(
-                    f"Unsupported workflow node: {current_node.value}"
+            if current_node is WorkflowNode.PREPARE_GENERATION_CONTEXT:
+                elapsed = self._measure_stage_delta(
+                    state,
+                    "prepare_generation_context",
+                    lambda: self.prepare_generation_context(state),
                 )
+                yield self._stage_event(
+                    emitter,
+                    state,
+                    "prepare_generation_context",
+                    elapsed,
+                )
+                current_node = WorkflowNode.GENERATE_CANDIDATE_ANSWER
+                continue
+
+            if current_node is not WorkflowNode.EXECUTE_TOOL_PLAN:
+                raise RuntimeError(f"Unsupported workflow node: {current_node.value}")
             prior_tool_calls = len(state.tool_calls)
             elapsed = self._measure_stage_delta(
                 state,
@@ -695,9 +779,7 @@ class AgenticRAGWorkflow:
             state.memory_recall_decision = "searched"
             state.memory_recall_mode = "semantic"
             state.memory_recall_reason = (
-                directive.reason
-                if directive is not None
-                else "contextual_followup"
+                directive.reason if directive is not None else "contextual_followup"
             )
             state.memory_requested_count = None
             state.memory_recall_types = ["session_summary", "task_state"]
@@ -729,6 +811,7 @@ class AgenticRAGWorkflow:
                 state.memory_context = "\n".join(context_parts)
                 state.memory_status = "recalled" if records else "empty"
             self._recall_selective_memory(state)
+
     def persist_turn_memory(self, state: AgentState) -> None:
         """Persist one verified terminal turn without invalidating its answer."""
 
@@ -968,26 +1051,27 @@ class AgenticRAGWorkflow:
             or not state.citations
         ):
             return
-        chunks_by_id = {
-            item.chunk.chunk_id: item.chunk
-            for item in state.reranked_chunks
-            if item.selected
+        results_by_id = {
+            item.chunk.chunk_id: item for item in state.reranked_chunks if item.selected
         }
         evidence: list[CachedEvidence] = []
         for citation in state.citations:
             chunk_id = str(citation.get("chunk_id", ""))
-            chunk = chunks_by_id.get(chunk_id)
-            if chunk is None or not chunk.checksum:
+            selected_result = results_by_id.get(chunk_id)
+            checksum = selected_result.chunk.checksum if selected_result else None
+            if selected_result is None or not checksum:
                 state.response_cache_status = "write_failed"
                 state.response_cache_fallback_reason = "uncacheable_evidence"
                 return
+            chunk = selected_result.chunk
             evidence.append(
                 CachedEvidence(
                     chunk_id=chunk.chunk_id,
                     doc_id=chunk.doc_id,
                     doc_version=chunk.doc_version,
-                    checksum=chunk.checksum,
+                    checksum=checksum,
                     is_current=chunk.is_current,
+                    fusion_recipe=selected_result.search_result.fusion_recipe,
                 )
             )
         try:
@@ -1095,12 +1179,9 @@ class AgenticRAGWorkflow:
                         and item.get("memory_type") == "short_term"
                         and str(item.get("summary", "")).strip()
                     ]
-                    state.answer = (
-                        "你最近的问题如下（从近到远）：\n"
-                        + "\n".join(
-                            f"{index}. {question}"
-                            for index, question in enumerate(questions, start=1)
-                        )
+                    state.answer = "你最近的问题如下（从近到远）：\n" + "\n".join(
+                        f"{index}. {question}"
+                        for index, question in enumerate(questions, start=1)
                     )
                 else:
                     summaries = list(state.selective_memory_private_values)
@@ -1111,9 +1192,8 @@ class AgenticRAGWorkflow:
                             if str(item.get("summary", "")).strip()
                         ]
                     summaries = list(dict.fromkeys(summaries))
-                    state.answer = (
-                        "根据当前会话中你之前提供的信息：\n- "
-                        + "\n- ".join(summaries)
+                    state.answer = "根据当前会话中你之前提供的信息：\n- " + "\n- ".join(
+                        summaries
                     )
                 state.terminal_status = "answered_from_memory"
             else:
@@ -1429,7 +1509,7 @@ class AgenticRAGWorkflow:
         }
 
     def rewrite_query(self, state: AgentState) -> None:
-        """Create a bounded tool-aware query plan."""
+        """Transform once, then attach only authorized tools and scopes."""
 
         if state.query_plan:
             return
@@ -1439,18 +1519,35 @@ class AgenticRAGWorkflow:
             f"{item['entity']} {item['comment']}" for item in state.matched_entities
         )
         scopes = self._plan_version_scopes(state.version_scope)
-        scoped_tools = [
+        scoped_tools: list[tuple[str, dict[str, Any]]] = [
             (tool_name, scope) for tool_name in state.selected_tools for scope in scopes
         ]
-        prior_id: str | None = None
-        for index, (tool_name, version_scope) in enumerate(
-            scoped_tools[:MAX_INITIAL_SUBQUERIES],
-            start=1,
-        ):
+        transform_request = QueryTransformRequest(
+            user_query=state.user_query,
+            resolved_entities=tuple(
+                str(item["entity"])
+                for item in state.matched_entities
+                if isinstance(item.get("entity"), str)
+            ),
+            memory_context=state.memory_context,
+        )
+        transformation = validate_transformation(
+            self.query_transformer.transform(transform_request),
+            transform_request,
+        )
+        transform_items = list(transformation.items)
+        plan_slots = list(scoped_tools[:MAX_INITIAL_SUBQUERIES])
+        while len(plan_slots) < len(transform_items) and scoped_tools:
+            plan_slots.append(scoped_tools[0])
+        plan_slots = plan_slots[:MAX_INITIAL_SUBQUERIES]
+        plan_ids = [f"sq{index}" for index in range(1, len(plan_slots) + 1)]
+        transform_index_by_plan: list[int] = []
+        for zero_index, (tool_name, version_scope) in enumerate(plan_slots):
+            transform_index = min(zero_index, len(transform_items) - 1)
+            transform_index_by_plan.append(transform_index)
+            transform_item = transform_items[transform_index]
             tool = SEARCH_TOOLS[tool_name]
-            query = f"{state.user_query} {tool.query_hint}"
-            if state.memory_context:
-                query += f" prior session context {state.memory_context}"
+            query = f"{transform_item.query} {tool.query_hint}"
             if resolved_terms:
                 query += f" {resolved_terms}"
             if tool_name == "search_code_docs" and (
@@ -1467,28 +1564,39 @@ class AgenticRAGWorkflow:
             ):
                 query += " product roadmap coverage planned capabilities"
 
-            dependencies: list[str] = []
-            if (
-                state.intent == "comparison"
-                and prior_id is not None
-                and tool_name == "search_product_docs"
-            ):
-                dependencies = [prior_id]
-            subquery_id = f"sq{index}"
+            dependencies = [
+                plan_ids[dependency_plan_index]
+                for dependency_plan_index, candidate_transform_index in enumerate(
+                    transform_index_by_plan
+                )
+                if (
+                    candidate_transform_index in transform_item.depends_on
+                    and dependency_plan_index < zero_index
+                )
+            ]
+            subquery_id = plan_ids[zero_index]
             plan.append(
                 {
                     "subquery_id": subquery_id,
                     "tool": tool_name,
                     "query": query,
+                    "query_role": transform_item.query_role,
                     "depends_on": dependencies,
                     "status": "pending",
                     "round": 0,
                     "version_scope": dict(version_scope),
                 }
             )
-            prior_id = subquery_id
 
         state.query_plan = plan[:MAX_INITIAL_SUBQUERIES]
+        state.query_transformation = {
+            "strategy": transformation.strategy,
+            "item_roles": [item.query_role for item in transformation.items],
+            "item_count": len(transformation.items),
+            "transformer_name": transformation.transformer_name,
+            "model": transformation.model,
+            "fallback_reason": transformation.fallback_reason,
+        }
         state.rewritten_queries = [str(item["query"]) for item in state.query_plan]
         state.query_rewrite_rounds.append(
             {
@@ -1505,6 +1613,7 @@ class AgenticRAGWorkflow:
         self.rewrite_query(state)
         return RetrievalPlanResult(
             selected_tools=tuple(state.selected_tools),
+            transformation=dict(state.query_transformation),
             plan_count=len(state.query_plan),
         )
 
@@ -1549,8 +1658,10 @@ class AgenticRAGWorkflow:
                 )
             )
 
+        profile_group = self._profile_tool_searches(state, prepared_calls)
         parallel = (
-            len(prepared_calls) > 1
+            profile_group is None
+            and len(prepared_calls) > 1
             and getattr(
                 self.retriever,
                 "supports_parallel_search",
@@ -1558,10 +1669,8 @@ class AgenticRAGWorkflow:
             )
             is True
         )
-        state.retrieval_execution_mode = (
-            "parallel" if parallel else "sequential"
-        )
-        outcomes = (
+        state.retrieval_execution_mode = "parallel" if parallel else "sequential"
+        outcomes = profile_group or (
             self._parallel_tool_searches(state, prepared_calls)
             if parallel
             else [
@@ -1590,14 +1699,70 @@ class AgenticRAGWorkflow:
                     "tool": tool.name,
                     "subquery_id": item["subquery_id"],
                     "query": item["query"],
+                    "query_role": item.get("query_role", "primary"),
                     "filters": tool_filters,
                     "result_count": len(results),
                     "result_chunk_ids": result_ids,
                     "latency_ms": outcome.latency_ms,
                     "round": state.retry_count,
                     "version_scope": version_scope,
+                    "retrieval_profile": outcome.retrieval_profile,
+                    "result_granularity": "passage",
+                    "element_offsets": [
+                        result.element_offset
+                        for result in results
+                        if result.element_offset is not None
+                    ],
+                    "document_candidate_count": len(outcome.document_candidates),
+                    "element_predicate_count": 0,
+                    "collapse_status": (
+                        "parent_shortlist_then_element"
+                        if outcome.document_candidates
+                        else (
+                            "element_identity_preserved"
+                            if outcome.retrieval_profile.startswith("struct_")
+                            else "not_applicable"
+                        )
+                    ),
+                    "fusion_recipe": next(
+                        (
+                            result.fusion_recipe
+                            for result in results
+                            if result.fusion_recipe is not None
+                        ),
+                        None,
+                    ),
                 }
             )
+            state.retrieval_profile = outcome.retrieval_profile
+            state.structarray_status = outcome.capability_status
+            resolved_by_key: dict[str, set[int]] = {}
+            for result in results:
+                if result.document_key and result.element_offset is not None:
+                    resolved_by_key.setdefault(result.document_key, set()).add(
+                        result.element_offset
+                    )
+            for candidate in outcome.document_candidates:
+                key = str(candidate["document_key"])
+                existing = next(
+                    (
+                        item
+                        for item in state.document_candidates
+                        if item.get("document_key") == key
+                    ),
+                    None,
+                )
+                if existing is None:
+                    existing = dict(candidate)
+                    existing["resolved_element_count"] = 0
+                    existing["resolved_to_evidence"] = False
+                    state.document_candidates.append(existing)
+                existing["resolved_element_count"] = int(
+                    existing["resolved_element_count"]
+                ) + len(resolved_by_key.get(key, set()))
+                existing["resolved_to_evidence"] = bool(
+                    existing["resolved_element_count"]
+                )
             for result in results:
                 state.retrieval_provenance.setdefault(
                     result.chunk.chunk_id,
@@ -1606,6 +1771,12 @@ class AgenticRAGWorkflow:
                     {
                         "tool": tool.name,
                         "subquery_id": item["subquery_id"],
+                        "query_role": item.get("query_role", "primary"),
+                        "retrieval_profile": result.retrieval_profile,
+                        "retrieval_paths": list(result.retrieval_paths),
+                        "result_granularity": result.result_granularity,
+                        "element_offset": result.element_offset,
+                        "fusion_recipe": result.fusion_recipe,
                     }
                 )
             item["status"] = "completed"
@@ -1663,12 +1834,32 @@ class AgenticRAGWorkflow:
         """Execute one isolated raw search without mutating workflow state."""
 
         started = self._clock()
-        results = self.retriever.search(
-            str(prepared.plan_item["query"]),
-            top_k=state.milvus_top_k,
-            filters=prepared.filters,
-            order_by=state.search_order_by,
-        )
+        profile_search = getattr(self.retriever, "search_profile", None)
+        profile_name = "flat_hybrid"
+        capability_status = "ready"
+        candidates: tuple[dict[str, Any], ...] = ()
+        if callable(profile_search):
+            run = profile_search(
+                [str(prepared.plan_item["query"])],
+                top_k=state.milvus_top_k,
+                filters=prepared.filters,
+                order_by=state.search_order_by,
+            )
+            if len(run.results_by_query) != 1:
+                raise RuntimeError(
+                    "StructArray profile returned an invalid query result count"
+                )
+            results = list(run.results_by_query[0])
+            profile_name = run.effective_profile
+            capability_status = run.capability_status
+            candidates = tuple(item.to_dict() for item in run.document_candidates)
+        else:
+            results = self.retriever.search(
+                str(prepared.plan_item["query"]),
+                top_k=state.milvus_top_k,
+                filters=prepared.filters,
+                order_by=state.search_order_by,
+            )
         latency_ms = round(
             max(0.0, (self._clock() - started) * 1000),
             3,
@@ -1677,7 +1868,59 @@ class AgenticRAGWorkflow:
             prepared=prepared,
             results=tuple(results),
             latency_ms=latency_ms,
+            retrieval_profile=profile_name,
+            capability_status=capability_status,
+            document_candidates=candidates,
         )
+
+    def _profile_tool_searches(
+        self,
+        state: AgentState,
+        prepared_calls: list[_PreparedToolCall],
+    ) -> list[_ToolSearchOutcome] | None:
+        """Group eligible same-scope aspects into one immutable profile run."""
+
+        search_profile = getattr(self.retriever, "search_profile", None)
+        if not callable(search_profile) or not 2 <= len(prepared_calls) <= 3:
+            return None
+        first = prepared_calls[0]
+        if any(
+            prepared.tool.name != first.tool.name
+            or prepared.filters != first.filters
+            or prepared.version_scope != first.version_scope
+            or prepared.plan_item.get("query_role", "primary")
+            not in {"primary", "aspect"}
+            for prepared in prepared_calls
+        ):
+            return None
+        started = self._clock()
+        run = search_profile(
+            [str(item.plan_item["query"]) for item in prepared_calls],
+            top_k=state.milvus_top_k,
+            filters=first.filters,
+            order_by=state.search_order_by,
+        )
+        if len(run.results_by_query) != len(prepared_calls):
+            raise RuntimeError(
+                "StructArray profile returned an invalid query result count"
+            )
+        elapsed = round(max(0.0, (self._clock() - started) * 1000), 3)
+        candidates = tuple(item.to_dict() for item in run.document_candidates)
+        return [
+            _ToolSearchOutcome(
+                prepared=prepared,
+                results=tuple(results),
+                latency_ms=elapsed,
+                retrieval_profile=run.effective_profile,
+                capability_status=run.capability_status,
+                document_candidates=candidates,
+            )
+            for prepared, results in zip(
+                prepared_calls,
+                run.results_by_query,
+                strict=True,
+            )
+        ]
 
     def _parallel_tool_searches(
         self,
@@ -1711,9 +1954,8 @@ class AgenticRAGWorkflow:
             return
         query = self._effective_query(state)
         top_k = len(state.retrieved_chunks)
-        if (
-            state.reranker_sticky_fallback_reason is not None
-            and isinstance(self.reranker, FallbackReranker)
+        if state.reranker_sticky_fallback_reason is not None and isinstance(
+            self.reranker, FallbackReranker
         ):
             rerank_run = self.reranker.rerank_fallback_only(
                 query,
@@ -1786,8 +2028,27 @@ class AgenticRAGWorkflow:
                 )
             )
         ]
-        top_score = (
-            state.reranked_chunks[0].rerank_score if state.reranked_chunks else 0.0
+        if state.query_transformation.get("strategy") == "step_back":
+            primary_plan_ids = {
+                str(item["subquery_id"])
+                for item in state.query_plan
+                if item.get("query_role") != "background"
+            }
+            has_primary_evidence = any(
+                any(
+                    provenance.get("subquery_id") in primary_plan_ids
+                    for provenance in state.retrieval_provenance.get(
+                        item.chunk.chunk_id,
+                        [],
+                    )
+                )
+                for item in relevant
+            )
+            if not has_primary_evidence:
+                relevant = []
+        top_score = max(
+            (item.rerank_score for item in relevant),
+            default=0.0,
         )
         unique_relevant = {item.chunk.chunk_id for item in relevant}
         pending_tools = {
@@ -1844,9 +2105,7 @@ class AgenticRAGWorkflow:
         )
         if state.retrieval_goal == "exhaustive":
             enough = (
-                enough
-                and bool(expanded_ids)
-                and expanded_ids.issubset(unique_relevant)
+                enough and bool(expanded_ids) and expanded_ids.issubset(unique_relevant)
             )
         elif strong_single:
             enough = True
@@ -1860,11 +2119,7 @@ class AgenticRAGWorkflow:
         evidence_basis = (
             "single_strong_chunk"
             if strong_single and enough
-            else (
-                "multi_chunk_coverage"
-                if enough
-                else "insufficient_evidence"
-            )
+            else ("multi_chunk_coverage" if enough else "insufficient_evidence")
         )
         missing_aspects = self._missing_evidence_aspects(
             state,
@@ -1872,6 +2127,7 @@ class AgenticRAGWorkflow:
             relevant=relevant,
             missing_tools=missing_tools,
             missing_version_scopes=missing_version_scopes,
+            threshold=self._strong_single_threshold(),
         )
 
         selected: list[RerankedResult] = []
@@ -1934,6 +2190,27 @@ class AgenticRAGWorkflow:
             missing_version_scopes=missing_version_scopes,
         )
 
+    def _strong_single_threshold(self) -> float:
+        """Return the injected reranker's own single-strong-chunk threshold.
+
+        Rerank scores are not comparable across implementations, so the gate is
+        read from whichever reranker actually ranked rather than from a shared
+        constant.
+        """
+
+        value = getattr(self.reranker, "strong_single_evidence_threshold", None)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or not 0.0 <= float(value) <= 1.0
+        ):
+            raise ValueError(
+                f"reranker {getattr(self.reranker, 'name', '<unnamed>')!r} must "
+                "declare a finite strong_single_evidence_threshold in [0, 1]"
+            )
+        return float(value)
+
     def _is_strong_single_evidence(
         self,
         state: AgentState,
@@ -1955,7 +2232,7 @@ class AgenticRAGWorkflow:
         result = relevant[0]
         section = self._normalize_match_text(result.chunk.section or "")
         if (
-            result.rerank_score < STRONG_SINGLE_EVIDENCE_THRESHOLD
+            result.rerank_score < self._strong_single_threshold()
             or not section
             or section not in self._normalize_match_text(state.user_query)
         ):
@@ -1980,6 +2257,7 @@ class AgenticRAGWorkflow:
         relevant: list[RerankedResult],
         missing_tools: list[str],
         missing_version_scopes: list[dict[str, Any]],
+        threshold: float,
     ) -> list[str]:
         """Return registered diagnostic codes derived from actual gaps."""
 
@@ -1987,8 +2265,7 @@ class AgenticRAGWorkflow:
             return []
         aspects = [f"tool:{tool}" for tool in missing_tools]
         aspects.extend(
-            "version:"
-            + str(scope.get("doc_version", scope.get("mode", "unknown")))
+            "version:" + str(scope.get("doc_version", scope.get("mode", "unknown")))
             for scope in missing_version_scopes
         )
         if state.retrieval_goal == "exhaustive":
@@ -1996,23 +2273,16 @@ class AgenticRAGWorkflow:
         elif not relevant:
             aspects.append("no_relevant_evidence")
         elif len(relevant) == 1:
-            if AgenticRAGWorkflow._has_multiple_requested_aspects(
-                state.user_query
-            ):
+            if AgenticRAGWorkflow._has_multiple_requested_aspects(state.user_query):
                 aspects.append("multi_aspect_requires_coverage")
-            if (
-                relevant[0].rerank_score
-                < STRONG_SINGLE_EVIDENCE_THRESHOLD
-            ):
+            if relevant[0].rerank_score < threshold:
                 aspects.append("single_weak_chunk")
             else:
                 section = AgenticRAGWorkflow._normalize_match_text(
                     relevant[0].chunk.section or ""
                 )
                 direct = bool(section) and section in (
-                    AgenticRAGWorkflow._normalize_match_text(
-                        state.user_query
-                    )
+                    AgenticRAGWorkflow._normalize_match_text(state.user_query)
                 )
                 if not direct:
                     aspects.append("single_indirect_chunk")
@@ -2098,9 +2368,7 @@ class AgenticRAGWorkflow:
             state.retrieval_stop_reason = "duplicate_retry_query"
             state.evidence_grade = {
                 **state.evidence_grade,
-                "reason": (
-                    "Supplementary retrieval would repeat an existing plan."
-                ),
+                "reason": ("Supplementary retrieval would repeat an existing plan."),
                 "stop_reason": "duplicate_retry_query",
                 "retry_query_status": "duplicate",
             }
@@ -2161,7 +2429,6 @@ class AgenticRAGWorkflow:
     ) -> Iterable[str]:
         """Generate a citation-validated grounded answer from selected chunks."""
 
-        selected = [item for item in state.reranked_chunks if item.selected]
         if not state.enough_evidence:
             state.citations = []
             yield (
@@ -2171,13 +2438,10 @@ class AgenticRAGWorkflow:
             )
             return
 
-        context_limit = (
-            MAX_EXHAUSTIVE_CONTEXTS
-            if state.retrieval_goal == "exhaustive"
-            else MAX_CONTEXTS
-        )
-        selected = self._dedupe_by_chunk(selected)[:context_limit]
-        contexts, citation_map, truncated_count = self._generation_contexts(selected)
+        if not state.generation_contexts:
+            self.prepare_generation_context(state)
+        contexts = list(state.generation_contexts)
+        citation_map = dict(state.generation_citation_map)
         request = GenerationRequest(
             query_id=state.query_id,
             user_query=state.user_query,
@@ -2204,8 +2468,50 @@ class AgenticRAGWorkflow:
         state.generation_fallback_reason = result.fallback_reason
         state.generation_context_count = len(contexts)
         state.generation_resolved_entity_count = len(state.matched_entities)
-        state.generation_context_truncated_count = truncated_count
         yield from self._answer_chunks(result.text)
+
+    def prepare_generation_context(self, state: AgentState) -> None:
+        """Project selected evidence for generation without changing its identity."""
+
+        if not state.enough_evidence:
+            raise ValueError("context preparation requires sufficient evidence")
+        selected = [item for item in state.reranked_chunks if item.selected]
+        context_limit = (
+            MAX_EXHAUSTIVE_CONTEXTS
+            if state.retrieval_goal == "exhaustive"
+            else MAX_CONTEXTS
+        )
+        selected = self._dedupe_by_chunk(selected)[:context_limit]
+        originals, citation_map, truncated_count = self._generation_contexts(selected)
+        original_ids = [context.chunk_id for context in originals]
+        run = validate_compression_run(
+            self.context_compressor.compress(state.user_query, originals),
+            originals,
+            query=state.user_query,
+            required_terms=tuple(
+                str(item["entity"])
+                for item in state.matched_entities
+                if isinstance(item.get("entity"), str)
+            ),
+        )
+        projected = list(run.contexts)
+        if [context.chunk_id for context in projected] != original_ids:
+            raise ValueError("context compression changed selected source identity")
+        before_chars = sum(len(context.prompt_text) for context in originals)
+        after_chars = sum(len(context.prompt_text) for context in projected)
+        state.generation_contexts = projected
+        state.generation_citation_map = citation_map
+        state.generation_context_truncated_count = truncated_count
+        state.context_compression = {
+            "configured_mode": run.configured_mode,
+            "effective_mode": run.effective_mode,
+            "compressor_name": run.compressor_name,
+            "model": run.model,
+            "before_chars": before_chars,
+            "after_chars": after_chars,
+            "retained_source_count": len(projected),
+            "fallback_reason": run.fallback_reason,
+        }
 
     def verify_answer(self, state: AgentState) -> None:
         """Verify terminal citations and selected-context membership."""
@@ -2536,7 +2842,7 @@ class AgenticRAGWorkflow:
                     title=item.chunk.title,
                     page_no=item.chunk.page_no,
                     section=item.chunk.section,
-                    text=bounded_text,
+                    prompt_text=bounded_text,
                 )
             )
             citation_map[citation_id] = item.chunk.citation(citation_id)
@@ -2659,9 +2965,7 @@ class AgenticRAGWorkflow:
             "incomplete_exhaustive_coverage": "complete feature list",
         }
         parts.extend(
-            aspect_hints.get(aspect, aspect)
-            for aspect in missing_aspects
-            if aspect
+            aspect_hints.get(aspect, aspect) for aspect in missing_aspects if aspect
         )
         output: list[str] = []
         seen: set[str] = set()
@@ -2798,12 +3102,16 @@ class AgenticRAGWorkflow:
                 "chunk_id": item.chunk.chunk_id,
                 "doc_version": item.chunk.doc_version,
                 "checksum": item.chunk.checksum,
-                "tools": sorted(
+                "tool_paths": sorted(
                     {
-                        str(entry["tool"])
+                        f"{entry['tool']}:{path}"
                         for entry in state.retrieval_provenance.get(
                             item.chunk.chunk_id,
                             [],
+                        )
+                        for path in entry.get(
+                            "retrieval_paths",
+                            ("flat_hybrid",),
                         )
                     }
                 ),
@@ -2815,9 +3123,7 @@ class AgenticRAGWorkflow:
         ]
         payload = {
             "chunks": chunks,
-            "expanded_chunk_ids": sorted(
-                AgenticRAGWorkflow._expanded_chunk_ids(state)
-            ),
+            "expanded_chunk_ids": sorted(AgenticRAGWorkflow._expanded_chunk_ids(state)),
         }
         encoded = json.dumps(
             payload,
@@ -2896,6 +3202,10 @@ class AgenticRAGWorkflow:
             ),
             "generation_latency_ms": state.stage_latency_ms.get(
                 "generate_answer_streaming",
+                0.0,
+            ),
+            "context_compression_latency_ms": state.stage_latency_ms.get(
+                "prepare_generation_context",
                 0.0,
             ),
             "memory_recall_latency_ms": state.stage_latency_ms.get(
@@ -3008,12 +3318,14 @@ class AgenticRAGWorkflow:
                 "reasons": state.tool_selection_reasons,
             },
             "retrieval_goal": state.retrieval_goal,
+            "query_transformation": dict(state.query_transformation),
             "rewrite_query": {"rounds": state.query_rewrite_rounds},
             "query_plan": state.query_plan,
             "tool_calls": state.tool_calls,
             "document_expansions": state.document_expansions,
             "milvus_search": {
                 "mode": state.search_mode,
+                "tier": state.retrieval_tier,
                 "execution_mode": state.retrieval_execution_mode,
                 "top_k": state.milvus_top_k,
                 "order_by": state.search_order_by,
@@ -3021,13 +3333,9 @@ class AgenticRAGWorkflow:
             "reranker": {
                 "name": state.reranker_name,
                 "model": state.reranker_model,
-                "fallback_active": (
-                    state.reranker_fallback_reason is not None
-                ),
+                "fallback_active": (state.reranker_fallback_reason is not None),
                 "fallback_reason": state.reranker_fallback_reason,
-                "sticky_fallback_reason": (
-                    state.reranker_sticky_fallback_reason
-                ),
+                "sticky_fallback_reason": (state.reranker_sticky_fallback_reason),
                 "primary_attempt_count": state.reranker_primary_attempt_count,
                 "fallback_only_count": state.reranker_fallback_only_count,
                 "input_candidates": len(state.retrieved_chunks),
@@ -3035,11 +3343,23 @@ class AgenticRAGWorkflow:
                 "output_top_k": state.reranker_top_k,
             },
             "evidence_grading": state.evidence_grade,
+            "context_compression": dict(state.context_compression),
             "answer_generation": {
                 "generator_name": state.answer_generator_name,
                 "model": state.answer_model,
                 "mode": state.generation_mode,
                 "context_count": state.generation_context_count,
+                "compressed_context_count": sum(
+                    1
+                    for context in state.generation_contexts
+                    if getattr(context, "compression_mode", "disabled") != "disabled"
+                ),
+                "compression_modes": sorted(
+                    {
+                        str(getattr(context, "compression_mode", "disabled"))
+                        for context in state.generation_contexts
+                    }
+                ),
                 "resolved_entity_count": (state.generation_resolved_entity_count),
                 "version_scope": state.version_scope.get("mode"),
                 "context_truncated_count": (state.generation_context_truncated_count),
@@ -3055,7 +3375,7 @@ class AgenticRAGWorkflow:
         self,
         state: AgentState,
         name: str,
-        action: Callable[[], None],
+        action: Callable[[], object],
     ) -> None:
         started = self._clock()
         try:
@@ -3069,7 +3389,7 @@ class AgenticRAGWorkflow:
         self,
         state: AgentState,
         name: str,
-        action: Callable[[], None],
+        action: Callable[[], object],
     ) -> float:
         """Measure one invocation without exposing accumulated retry time."""
 
@@ -3293,6 +3613,17 @@ class AgenticRAGWorkflow:
                 {
                     "selected_tools": list(state.selected_tools),
                     "plan_count": len(state.query_plan),
+                    "strategy": state.query_transformation.get("strategy"),
+                    "item_roles": state.query_transformation.get(
+                        "item_roles",
+                        [],
+                    ),
+                    "transformer_name": state.query_transformation.get(
+                        "transformer_name"
+                    ),
+                    "fallback_reason": state.query_transformation.get(
+                        "fallback_reason"
+                    ),
                 },
                 "completed",
             ),
@@ -3309,9 +3640,7 @@ class AgenticRAGWorkflow:
                     "execution_mode": state.retrieval_execution_mode,
                     "retry_count": state.retry_count,
                     "candidate_pool_status": (
-                        "unchanged"
-                        if state.candidate_pool_unchanged
-                        else "changed"
+                        "unchanged" if state.candidate_pool_unchanged else "changed"
                     ),
                     "stop_reason": state.retrieval_stop_reason,
                 },
@@ -3324,9 +3653,7 @@ class AgenticRAGWorkflow:
                     "candidate_count": len(state.reranked_chunks),
                     "primary_attempt_count": state.reranker_primary_attempt_count,
                     "fallback_only_count": state.reranker_fallback_only_count,
-                    "sticky_fallback_reason": (
-                        state.reranker_sticky_fallback_reason
-                    ),
+                    "sticky_fallback_reason": (state.reranker_sticky_fallback_reason),
                 },
                 "completed",
             ),
@@ -3385,6 +3712,30 @@ class AgenticRAGWorkflow:
                     "fallback_reason": state.generation_fallback_reason,
                 },
                 "completed",
+            ),
+            "prepare_generation_context": (
+                "已准备生成上下文",
+                (
+                    f"保留 {state.context_compression.get('retained_source_count', 0)} "
+                    "个原始证据来源。"
+                ),
+                {
+                    "configured_mode": state.context_compression.get("configured_mode"),
+                    "effective_mode": state.context_compression.get("effective_mode"),
+                    "compressor_name": state.context_compression.get("compressor_name"),
+                    "before_chars": state.context_compression.get("before_chars"),
+                    "after_chars": state.context_compression.get("after_chars"),
+                    "retained_source_count": state.context_compression.get(
+                        "retained_source_count"
+                    ),
+                    "fallback_reason": state.context_compression.get("fallback_reason"),
+                },
+                (
+                    "warning"
+                    if state.context_compression.get("fallback_reason")
+                    not in {None, "below_trigger", "not_configured"}
+                    else "completed"
+                ),
             ),
             "verify_answer": (
                 "已验证答案",
@@ -3464,6 +3815,17 @@ class AgenticRAGWorkflow:
                 "round": int(tool_call["round"]),
                 "version_mode": version_scope.get("mode"),
                 "doc_version": version_scope.get("doc_version"),
+                "retrieval_profile": tool_call.get("retrieval_profile"),
+                "result_granularity": tool_call.get("result_granularity"),
+                "element_hit_count": len(tool_call.get("element_offsets", [])),
+                "document_candidate_count": int(
+                    tool_call.get("document_candidate_count", 0)
+                ),
+                "element_predicate_count": int(
+                    tool_call.get("element_predicate_count", 0)
+                ),
+                "collapse_status": tool_call.get("collapse_status"),
+                "fusion_recipe": tool_call.get("fusion_recipe"),
             },
         )
 
@@ -3479,11 +3841,11 @@ class AgenticRAGWorkflow:
 
     @staticmethod
     def _serialize(state: AgentState) -> dict[str, Any]:
-        data = asdict(state)
-        data.pop("retrieved_chunks", None)
-        data.pop("reranked_chunks", None)
-        data.pop("response_cache_candidates", None)
-        data.pop("selective_memory_private_values", None)
+        data = {
+            item.name: deepcopy(getattr(state, item.name))
+            for item in fields(state)
+            if item.name not in UNSERIALIZED_STATE_FIELDS
+        }
         data["milvus_recalled"] = [item.to_dict() for item in state.retrieved_chunks]
         data["reranked"] = [item.to_dict() for item in state.reranked_chunks]
         return data

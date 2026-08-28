@@ -9,6 +9,7 @@ from threading import Barrier
 from typing import Any
 
 from agent_workshop_demo.cli import main
+from agent_workshop_demo.embedding import tokenize
 from agent_workshop_demo.generation import (
     GenerationRequest,
     GenerationResult,
@@ -25,7 +26,7 @@ from agent_workshop_demo.models import (
     RetrievalPlanResult,
     SearchResult,
 )
-from agent_workshop_demo.reranker import RerankRun, RuleBasedReranker
+from agent_workshop_demo.reranker import Reranker, RerankRun, RuleBasedReranker
 from agent_workshop_demo.retrieval import InMemoryHybridRetriever
 from agent_workshop_demo.sample_data import load_kb_chunks
 from agent_workshop_demo.workflow import (
@@ -127,8 +128,10 @@ class RecordingReranker(RuleBasedReranker):
         return super().rerank(query, chunks, top_k)
 
 
-class SectionScoreReranker:
+class SectionScoreReranker(Reranker):
     name = "section-score"
+    # An injected scorer declares its own scale rather than inheriting one.
+    strong_single_evidence_threshold = 0.80
 
     def __init__(
         self,
@@ -429,6 +432,163 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(
             "incomplete_exhaustive_coverage",
             exhaustive["evidence_grade"]["missing_aspects"],
+        )
+
+    def test_step_back_background_only_evidence_cannot_answer(self) -> None:
+        chunks = [
+            chunk
+            for chunk in load_kb_chunks()
+            if chunk.doc_id == "doc_milvus_feature_map"
+        ][:2]
+        results = [
+            SearchResult(
+                chunk=chunk,
+                rank=index,
+                dense_score=0.95,
+                keyword_score=0.95,
+                recency_score=1.0,
+                priority_score=1.0,
+                hybrid_score=0.95,
+            )
+            for index, chunk in enumerate(chunks, start=1)
+        ]
+
+        class BackgroundOnlyRetriever(StaticRetriever):
+            def search(
+                self,
+                query: str,
+                *,
+                top_k: int,
+                filters: dict[str, Any] | None = None,
+                order_by: list[str] | None = None,
+                order_mode: Any = "relevance",
+            ) -> list[SearchResult]:
+                del filters, order_by, order_mode
+                return self.results[:top_k] if "背景原理" in query else []
+
+        response = AgenticRAGWorkflow(
+            retriever=BackgroundOnlyRetriever(results),
+            reranker=SectionScoreReranker(default_score=0.95),
+        ).run("Milvus Force Merge 为什么这样工作？")
+
+        self.assertEqual(response["query_transformation"]["strategy"], "step_back")
+        self.assertEqual(response["terminal_status"], "abstained")
+        self.assertFalse(response["enough_evidence"])
+        self.assertEqual(response["citations"], [])
+
+    def test_irrelevant_top_chunk_cannot_satisfy_the_evidence_quality_gate(
+        self,
+    ) -> None:
+        """A chunk the grader excluded must not lend its score to the gate."""
+
+        related = [
+            chunk
+            for chunk in load_kb_chunks()
+            if chunk.doc_id == "doc_s3_sync_design"
+        ][:2]
+        unrelated = next(
+            chunk
+            for chunk in load_kb_chunks()
+            if not set(tokenize("S3 文档同步流程")).intersection(
+                tokenize(chunk.text)
+            )
+        )
+
+        def run(chunks: list[KBChunk]) -> dict[str, Any]:
+            results = [
+                SearchResult(
+                    chunk=chunk,
+                    rank=index,
+                    dense_score=0.5,
+                    keyword_score=0.5,
+                    recency_score=1.0,
+                    priority_score=1.0,
+                    hybrid_score=0.5,
+                )
+                for index, chunk in enumerate(chunks, start=1)
+            ]
+            return AgenticRAGWorkflow(
+                retriever=StaticRetriever(results),
+                reranker=SectionScoreReranker(
+                    section_scores={
+                        (unrelated.section or ""): 0.95,
+                    },
+                    default_score=0.25,
+                ),
+            ).run("我们 S3 文档同步流程是怎么设计的？")
+
+        without = run(related)
+        with_decoy = run([unrelated, *related])
+
+        self.assertEqual(without["terminal_status"], "abstained")
+        self.assertEqual(with_decoy["terminal_status"], "abstained")
+        self.assertEqual(
+            with_decoy["evidence_grade"]["relevant_chunks"],
+            without["evidence_grade"]["relevant_chunks"],
+        )
+        self.assertEqual(
+            with_decoy["evidence_grade"]["top_rerank_score"],
+            without["evidence_grade"]["top_rerank_score"],
+        )
+
+    def test_strong_single_threshold_comes_from_the_injected_reranker(
+        self,
+    ) -> None:
+        """Spec 12 § 5.7's gate is per implementation: scores are not comparable.
+
+        `RuleBasedReranker` returns a bounded composite of retrieval, overlap,
+        recency and priority; a model reranker returns an assigned relevance.
+        A shared constant would compare two scales.
+        """
+
+        chunks = self._release_chunks()
+        strict = AgenticRAGWorkflow(
+            retriever=InMemoryHybridRetriever(chunks),
+            reranker=SectionScoreReranker(section_scores={"Force Merge": 0.90}),
+        )
+        self.assertEqual(strict._strong_single_threshold(), 0.80)
+        strict_response = strict.run("介绍下 Milvus 3.0 Force Merge")
+        self.assertEqual(
+            strict_response["evidence_grade"]["evidence_basis"],
+            "single_strong_chunk",
+        )
+
+        lenient_reranker = SectionScoreReranker(
+            section_scores={"Force Merge": 0.90}
+        )
+        lenient_reranker.strong_single_evidence_threshold = 0.95
+        lenient = AgenticRAGWorkflow(
+            retriever=InMemoryHybridRetriever(chunks),
+            reranker=lenient_reranker,
+        )
+        self.assertEqual(lenient._strong_single_threshold(), 0.95)
+        lenient_response = lenient.run("介绍下 Milvus 3.0 Force Merge")
+        # The same 0.90 evidence no longer clears the raised bar.
+        self.assertNotEqual(
+            lenient_response["evidence_grade"]["evidence_basis"],
+            "single_strong_chunk",
+        )
+        self.assertIn(
+            "single_weak_chunk",
+            lenient_response["evidence_grade"]["missing_aspects"],
+        )
+
+    def test_reranker_without_a_declared_threshold_fails_closed(self) -> None:
+        class _UndeclaredReranker(SectionScoreReranker):
+            strong_single_evidence_threshold = None  # type: ignore[assignment]
+
+        workflow = AgenticRAGWorkflow(
+            retriever=InMemoryHybridRetriever(self._release_chunks()),
+            reranker=_UndeclaredReranker(),
+        )
+        with self.assertRaises(Exception) as caught:
+            workflow.run("介绍下 Milvus 3.0 Force Merge")
+        self.assertIn("strong_single_evidence_threshold", str(caught.exception))
+
+    def test_rule_based_reranker_declares_the_shipped_threshold(self) -> None:
+        self.assertEqual(
+            RuleBasedReranker().strong_single_evidence_threshold,
+            0.80,
         )
 
     def test_single_strong_chunk_does_not_answer_multi_aspect_question(
@@ -821,6 +981,62 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotEqual(state.candidate_pool_fingerprint, first)
         self.assertFalse(state.candidate_pool_unchanged)
 
+    def test_new_retrieval_path_is_progress_but_offset_alone_is_not(
+        self,
+    ) -> None:
+        """Provenance paths guard no-progress; query-local offsets do not."""
+
+        workflow = AgenticRAGWorkflow()
+        state = workflow.create_state("同一批证据")
+        state.retrieved_chunks = [
+            SearchResult(
+                chunk=chunk,
+                rank=index,
+                dense_score=0.5,
+                keyword_score=0.5,
+                recency_score=1.0,
+                priority_score=1.0,
+                hybrid_score=0.5,
+            )
+            for index, chunk in enumerate(load_kb_chunks()[:2], start=1)
+        ]
+        chunk_ids = [item.chunk.chunk_id for item in state.retrieved_chunks]
+        state.retrieval_provenance = {
+            chunk_id: [
+                {
+                    "tool": "search_code_docs",
+                    "subquery_id": "sq1",
+                    "retrieval_profile": "flat_hybrid",
+                    "retrieval_paths": ["flat_hybrid"],
+                    "result_granularity": "passage",
+                    "element_offset": None,
+                    "fusion_recipe": None,
+                }
+            ]
+            for chunk_id in chunk_ids
+        }
+        flat_only = workflow._candidate_pool_fingerprint(state)
+
+        for chunk_id in chunk_ids:
+            state.retrieval_provenance[chunk_id].append(
+                {
+                    "tool": "search_code_docs",
+                    "subquery_id": "retry1",
+                    "retrieval_profile": "struct_element",
+                    "retrieval_paths": ["struct_element"],
+                    "result_granularity": "passage",
+                    "element_offset": 4,
+                    "fusion_recipe": None,
+                }
+            )
+        with_struct_lane = workflow._candidate_pool_fingerprint(state)
+
+        state.retrieval_provenance[chunk_ids[0]][-1]["element_offset"] = 9
+        after_offset_change = workflow._candidate_pool_fingerprint(state)
+
+        self.assertNotEqual(with_struct_lane, flat_only)
+        self.assertEqual(after_offset_change, with_struct_lane)
+
     def test_general_question_preserves_direct_response(self) -> None:
         response = AgenticRAGWorkflow().run("你好")
 
@@ -849,6 +1065,27 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("classify_and_route", stages)
         self.assertIn("plan_retrieval", stages)
         self.assertIn("evaluate_evidence", stages)
+        self.assertIn("prepare_generation_context", stages)
+        self.assertEqual(
+            response["trace"]["context_compression"]["effective_mode"],
+            "disabled",
+        )
+        self.assertEqual(
+            response["trace"]["context_compression"]["before_chars"],
+            response["trace"]["context_compression"]["after_chars"],
+        )
+        self.assertEqual(
+            response["trace"]["answer_generation"]["compressed_context_count"],
+            0,
+        )
+        self.assertEqual(
+            response["trace"]["answer_generation"]["compression_modes"],
+            ["disabled"],
+        )
+        self.assertEqual(
+            response["trace"]["query_transformation"]["strategy"],
+            "identity",
+        )
         for removed_stage in (
             "classify_query",
             "decide_retrieval",
@@ -882,6 +1119,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsInstance(plan, RetrievalPlanResult)
         self.assertGreaterEqual(plan.plan_count, 1)
         self.assertEqual(plan.selected_tools, tuple(retrieval_state.selected_tools))
+        self.assertEqual(plan.transformation, retrieval_state.query_transformation)
 
     def test_independent_searches_parallelize_only_with_adapter_capability(
         self,

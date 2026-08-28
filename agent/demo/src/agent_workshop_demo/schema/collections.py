@@ -27,6 +27,24 @@ def varchar(
     }
 
 
+RETRIEVAL_ANALYZER_PARAMS: dict[str, Any] = {
+    "tokenizer": "standard",
+    "filter": [
+        "lowercase",
+        {
+            "type": "synonym",
+            # Milvus/Tantivy requires escaped spaces inside multi-word terms.
+            "synonyms": [
+                r"object\ storage, s3, minio",
+                r"vector\ database, vector\ db",
+                r"full\ text, bm25",
+            ],
+            "expand": True,
+        },
+    ],
+}
+
+
 KB_CHUNKS_COLLECTION: dict[str, Any] = {
     "collection_name": COLLECTION_NAMES["kb_chunks"],
     "description": "Enterprise knowledge chunks for Agentic RAG demo",
@@ -54,20 +72,7 @@ KB_CHUNKS_COLLECTION: dict[str, Any] = {
         varchar("retrieval_text", 32768, False, "BM25 Function input.")
         | {
             "enable_analyzer": True,
-            "analyzer_params": {
-                "tokenizer": "standard",
-                "filter": [
-                    "lowercase",
-                    {
-                        "type": "synonym",
-                        "synonyms": [
-                            "object storage, s3, minio",
-                            "vector database, vector db",
-                            "full text, bm25",
-                        ],
-                    },
-                ],
-            },
+            "analyzer_params": RETRIEVAL_ANALYZER_PARAMS,
         },
         varchar("text_summary", 2048, True, "Bounded UI snippet."),
         varchar("language", 16, False, "zh/en/mixed."),
@@ -185,6 +190,94 @@ KB_CHUNKS_SEARCH_DEFAULTS = {
     "order_mode": "relevance",
 }
 
+KB_DOCUMENTS_COLLECTION: dict[str, Any] = {
+    "collection_name": COLLECTION_NAMES["kb_documents"],
+    "description": "Derived StructArray document/passage retrieval projection",
+    "fields": [
+        varchar("document_key", 69, False, "Stable document-version key.")
+        | {"primary_key": True, "auto_id": False},
+        varchar("doc_id", 128, False, "Stable document family ID."),
+        varchar("doc_version", 64, False, "Opaque document edition."),
+        varchar("source_type", 32, False, "Parent source type."),
+        varchar("source_uri", 1024, False, "Display-safe parent URI."),
+        varchar("doc_type", 32, False, "Parent document type."),
+        varchar("title", 512, False, "Parent document title."),
+        varchar("department", 64, False, "Permission/filter boundary."),
+        {"name": "is_current", "type": "Bool", "nullable": False},
+        {"name": "updated_at", "type": "Int64", "nullable": False},
+        {"name": "priority", "type": "Int32", "nullable": False},
+        varchar(
+            "text_embedding_fingerprint",
+            256,
+            False,
+            "Dense vector-space identity.",
+        ),
+        varchar(
+            "projection_fingerprint",
+            64,
+            False,
+            "Full-build projection identity.",
+        ),
+        {"name": "projection_parent_count", "type": "Int32", "nullable": False},
+        {"name": "projection_passage_count", "type": "Int32", "nullable": False},
+        {"name": "passage_count", "type": "Int32", "nullable": False},
+        {
+            "name": "passages",
+            "type": "Array",
+            "element_type": "Struct",
+            "max_capacity": 1024,
+            "nullable": False,
+            "struct_fields": [
+                varchar("chunk_id", 512, False, "Stable citation identity."),
+                varchar("checksum", 128, False, "Authoritative content checksum."),
+                {"name": "chunk_index", "type": "Int32"},
+                {"name": "page_no", "type": "Int32"},
+                varchar("section", 2048, False, "Passage section or empty sentinel."),
+                varchar("record_type", 64, False, "Passage record type."),
+                varchar("language", 32, False, "Passage language."),
+                {
+                    "name": "embedding_list_vector",
+                    "type": "FloatVector",
+                    "dim": VECTOR_DIMS["TEXT_DIM"],
+                },
+                {
+                    "name": "element_vector",
+                    "type": "FloatVector",
+                    "dim": VECTOR_DIMS["TEXT_DIM"],
+                },
+            ],
+        },
+    ],
+}
+
+KB_DOCUMENTS_INDEXES: dict[str, Any] = {
+    "passages[embedding_list_vector]": {
+        "index_name": "passages_embedding_list_maxsim_idx",
+        "index_type": "HNSW",
+        "metric_type": "MAX_SIM_COSINE",
+        "params": {
+            "M": 16,
+            "efConstruction": 200,
+            "emb_list_strategy": "tokenann",
+        },
+    },
+    "passages[element_vector]": {
+        "index_name": "passages_element_cosine_idx",
+        "index_type": "HNSW",
+        "metric_type": "COSINE",
+        "params": {"M": 16, "efConstruction": 200},
+    },
+    "scalar_indexes": [
+        "doc_id",
+        "doc_version",
+        "source_type",
+        "doc_type",
+        "department",
+        "is_current",
+        "projection_fingerprint",
+    ],
+}
+
 CONVERSATION_MEMORY_COLLECTION: dict[str, Any] = {
     "collection_name": COLLECTION_NAMES["conversation_memory"],
     "description": "P2 conversation memory experiment",
@@ -231,7 +324,7 @@ CONVERSATION_MEMORY_INDEXES = {
         "role",
         "memory_type",
         "created_at",
-        "expires_at",
+        {"field_name": "expires_at", "index_type": "STL_SORT"},
     ],
 }
 
@@ -318,7 +411,7 @@ MEMORY_EVENTS_INDEXES = {
         "turn_id",
         "event_type",
         "event_time",
-        "expires_at",
+        {"field_name": "expires_at", "index_type": "STL_SORT"},
         "retention_class",
         "decay_profile",
         "permission_scope_hash",
@@ -389,7 +482,7 @@ MEMORY_FACTS_INDEXES = {
         "status",
         "revision",
         "last_confirmed_at",
-        "expires_at",
+        {"field_name": "expires_at", "index_type": "STL_SORT"},
         "permission_scope_hash",
     ],
 }
@@ -521,7 +614,7 @@ GROUNDED_RESPONSE_CACHE_INDEXES = {
         "kb_revision",
         "workflow_version",
         "created_at",
-        "expires_at",
+        {"field_name": "expires_at", "index_type": "STL_SORT"},
     ],
 }
 

@@ -25,6 +25,38 @@ Streamlit connects directly to Milvus at startup and fails fast when the
 configured collection is missing or cannot be loaded. The CLI and deterministic
 eval keep their offline `InMemoryHybridRetriever` path.
 
+## StructArray document/passage retrieval
+
+Milvus 3.0 StructArray support uses a derived `kb_documents` projection.
+`kb_chunks` remains authoritative for BM25, passage text, checksums,
+permissions, versions, and citations. Each projected document owns ordered
+passages and separate dense-vector subfields for element `COSINE` and
+EmbeddingList `MAX_SIM_COSINE` indexes.
+
+Create schemas/indexes, ingest chunks, and build the disabled projection:
+
+```bash
+python demo/scripts/create_collections.py --uri http://localhost:19530
+python demo/scripts/create_indexes.py --uri http://localhost:19530
+python demo/scripts/ingest_demo.py --uri http://localhost:19530 \
+  --struct-array-projection build
+```
+
+The last command prints a 64-character projection fingerprint. Native
+retrieval remains off until that exact value is supplied deliberately:
+
+```dotenv
+STRUCT_ARRAY_RETRIEVAL=struct_element
+MILVUS_STRUCT_ARRAY_COLLECTION_NAME=kb_documents
+STRUCT_ARRAY_PROJECTION_FINGERPRINT=<reported fingerprint>
+STRUCT_ARRAY_PARENT_TOP_K=8
+```
+
+Allowed profiles are `disabled`, `struct_element`, `struct_two_stage`, and
+`struct_fused`. Startup fails closed if schema, indexes, embedding space,
+fingerprint, or full-build counts differ. Run the isolated offline comparison
+without Milvus using `python demo/scripts/run_struct_array_eval.py`.
+
 ## Local Setup
 
 Use Python 3.10 or newer. This setup was validated with Python 3.13;
@@ -224,6 +256,29 @@ Force the offline path with:
 QUERY_CLASSIFIER=rule_based
 ```
 
+## Query Transformation
+
+`plan_retrieval` selects one bounded strategy from `identity`, `rewrite`,
+`step_back`, or `decompose`. Every plan contains at most three items with an
+explicit `primary`, `background`, `aspect`, or `hop` role. Named products,
+features, versions, negations, authorized tools, filters, and version scope are
+validated locally. A step-back background result cannot answer without primary
+evidence.
+
+The default is deterministic and offline. An optional strict one-request
+OpenAI transformer can be enabled with:
+
+```dotenv
+QUERY_TRANSFORMER=openai
+OPENAI_API_KEY=your-api-key
+OPENAI_QUERY_TRANSFORMER_MODEL=your-enabled-model-id
+OPENAI_QUERY_TRANSFORMER_TIMEOUT_SECONDS=10
+```
+
+The transformer model may fall back to `OPENAI_MODEL`. Provider, timeout, or
+invalid protected-term output falls back atomically to the rule plan. Use
+`QUERY_TRANSFORMER=rule_based` for the reproducible path.
+
 ## Model Reranking
 
 Configured CLI and Streamlit workflows can precision-rank the complete bounded
@@ -284,6 +339,27 @@ Force the reproducible offline path when desired:
 ```dotenv
 ANSWER_GENERATOR=deterministic
 ```
+
+## Context Compression
+
+After evidence is sufficient, `prepare_generation_context` can reduce the text
+shown to the answer generator without changing selected chunk IDs or citations.
+`selective` accepts only exact source spans in original order; `summary` and
+`extraction` retain exact support spans. The complete selected batch uses at
+most one provider call, and one invalid source ID, checksum, span, or oversized
+result restores every original context.
+
+```dotenv
+CONTEXT_COMPRESSION_MODE=auto
+CONTEXT_COMPRESSION_TRIGGER_CHARS=12000
+CONTEXT_COMPRESSION_MAX_OUTPUT_CHARS=12000
+OPENAI_CONTEXT_COMPRESSOR_MODEL=your-enabled-model-id
+OPENAI_CONTEXT_COMPRESSOR_TIMEOUT_SECONDS=15
+```
+
+Modes are `disabled`, `auto`, `selective`, `summary`, and `extraction`.
+`disabled` is the default; `auto` calls selective compression only above the
+trigger when a key and model are configured.
 
 ## Milvus Provisioning and Ingestion
 
@@ -525,12 +601,61 @@ Run golden QA evaluation:
 python demo/scripts/run_eval.py
 ```
 
-This validates matching question IDs across `eval/questions.json` and
-`eval/golden_answers.yaml`, then reports retrieval Recall@20, reranked
-Recall@8, selected-context Recall@5, citation precision/coverage,
-required-fact coverage, abstention accuracy, tool-selection accuracy,
-entity-resolution accuracy, version-scope accuracy, and cross-version
-contamination count.
+The default command overrides any provider values in `demo/.env` with the
+deterministic embedding, classifier, reranker, generator, and Memory selector,
+so it remains a no-network run. It validates matching question IDs across
+`eval/questions.json` and `eval/golden_answers.yaml`, then emits a versioned
+`rag-eval-v3` report. The strict `eval/metric_registry.json` defines the small
+active goal, guardrail, and operational portfolio, including each metric's
+grader, gate/budget, owner, action, cost, cadence, and lifecycle. The report
+embeds its semantic checksum and gives only those active metrics baseline
+deltas and decision statuses. Trajectory, tool, and outcome dimensions remain
+diagnostics for first-failure attribution; they are not a second KPI surface.
+Quality deltas are hardware-independent. Operational latency, cost, and
+throughput deltas require matching runtime and operational profiles, otherwise
+they remain `null` with a registered skip reason. Human transcript attribution
+comes from the strict `eval/rag_eval_review.json` fixture.
+
+The default question set includes a strict permission-denial scenario. Its
+scenario-aware workflow factory injects a deny decision and verifies that the
+workflow terminates before private retrieval; missing applicable cases still
+produce `evaluation_incomplete`, never a synthetic pass.
+
+Validate the registry, or a completed 30–50-trace bootstrap error-analysis
+artifact, without printing review notes:
+
+```bash
+PYTHONPATH=demo/src python -m agent_workshop_demo.eval_governance
+PYTHONPATH=demo/src python -m agent_workshop_demo.eval_governance \
+  --error-analysis demo/eval/error_analysis/2026-08-21-example.json
+```
+
+When intentionally establishing a new compatible baseline, bypass the old one
+and write the generated report explicitly:
+
+```bash
+python demo/scripts/run_eval.py \
+  --no-baseline \
+  --output demo/eval/rag_eval_baseline.json
+```
+
+To evaluate explicitly configured live providers, opt in and run at least
+three isolated trials per question:
+
+```bash
+python demo/scripts/run_eval.py --live-providers --trials 3
+```
+
+Live reports include both `pass_at_k` and `pass_power_k`; milestone gates use
+`pass_power_k`. Live mode does not implicitly reuse the deterministic baseline
+or review fixture; subsequent comparisons should pass a committed,
+profile-compatible live
+`--baseline` and matching `--review`. The runner rejects a baseline from a
+different registry, provider/model/vector space, dataset, trial count, or run
+mode. Provider cost remains `evaluation_incomplete` unless every trial reports
+bounded usage and cost-profile metadata.
+Custom question/golden files do not implicitly reuse the repository's baseline
+or review fixture.
 
 Compare the checked-in Min-Max Chunking configurations over the same corpus
 and stable source/term anchors:
@@ -542,14 +667,23 @@ IMAGE_EMBEDDING_PROVIDER=deterministic \
 python demo/scripts/run_chunking_experiment.py
 ```
 
-The runner reads `eval/chunking_configs.json` and
-`eval/chunking_anchors.json`, then reports lexical token-size distributions,
-under/over-limit counts, same-source near-duplicate rate, Markdown/PDF
-boundary preservation, Recall@20, selected-context Recall@5, and ingestion
-time. It compares at least two strict configurations and emits a deterministic
-recommendation; it does not change the production ingestion default. Index
-size is explicitly `null`/`not_built` because this offline experiment does not
-create a Milvus index.
+The `chunking-experiment-v2` runner reads `eval/chunking_configs.json` and
+`eval/chunking_anchors.json`. It compares three 128/256/512-token Min-Max
+profiles in isolated in-memory chunk sets and reports token/character shape,
+boundary preservation, Recall@20, reranked Recall@8, selected Recall@5,
+citation/fact/version checks, stage latency, token usage, and cost provenance.
+Each case runs through the production Agentic workflow seams with identity
+query transformation, disabled compression, deterministic answer generation,
+citation validation, evidence grading, and an explicit abstention fixture.
+Faithfulness and answer relevancy remain separate and are `null` until a
+calibrated grader is injected, so the default report is
+`evaluation_incomplete` and cannot publish a new default. A complete run also
+requires a reviewed recommendation artifact matching both the input experiment
+fingerprint and the grader/provider-bound quality evaluation fingerprint. The
+committed gate profile also rejects retrieval/citation/fact/boundary regression
+before Pareto selection; review cannot waive a failed gate. The runner never changes
+ingestion defaults. Index size is `null`/`not_built` because the offline command
+does not create a Milvus index.
 
 ## Streamlit UI
 

@@ -34,6 +34,7 @@ class RetrievalPlanResult:
     """Typed summary of one authorized initial retrieval plan."""
 
     selected_tools: tuple[str, ...]
+    transformation: dict[str, Any]
     plan_count: int
 
     def __post_init__(self) -> None:
@@ -111,28 +112,22 @@ class KBChunk:
                 if self.metadata
                 else None
             )
-            if (
-                not isinstance(image_fingerprint, str)
-                or not image_fingerprint.strip()
-            ):
+            if not isinstance(image_fingerprint, str) or not image_fingerprint.strip():
                 raise ValueError(
                     "image vectors require metadata.image_embedding_fingerprint"
                 )
-            invalid_image_values = (
-                len(self.image_vector) != VECTOR_DIMS["IMAGE_DIM"]
-                or any(
-                    isinstance(value, bool)
-                    or not isinstance(value, (int, float))
-                    or not math.isfinite(float(value))
-                    for value in self.image_vector
-                )
+            invalid_image_values = len(self.image_vector) != VECTOR_DIMS[
+                "IMAGE_DIM"
+            ] or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                for value in self.image_vector
             )
             image_norm = (
                 0.0
                 if invalid_image_values
-                else math.sqrt(
-                    sum(float(value) ** 2 for value in self.image_vector)
-                )
+                else math.sqrt(sum(float(value) ** 2 for value in self.image_vector))
             )
             if invalid_image_values or not math.isclose(
                 image_norm,
@@ -195,6 +190,24 @@ class SearchResult:
     recency_score: float
     priority_score: float
     hybrid_score: float
+    retrieval_profile: str = "flat_hybrid"
+    result_granularity: str = "passage"
+    document_key: str | None = None
+    struct_field: str | None = None
+    element_offset: int | None = None
+    parent_rank: int | None = None
+    retrieval_paths: tuple[str, ...] = ("flat_hybrid",)
+    fusion_recipe: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.rank < 0:
+            raise ValueError("search result rank must not be negative")
+        if self.result_granularity != "passage":
+            raise ValueError("citation search results must have passage granularity")
+        if self.element_offset is not None and self.element_offset < 0:
+            raise ValueError("element_offset must not be negative")
+        if not self.retrieval_paths:
+            raise ValueError("retrieval_paths must not be empty")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize a UI-safe result."""
@@ -209,6 +222,14 @@ class SearchResult:
                 "priority_score": round(self.priority_score, 4),
                 "hybrid_score": round(self.hybrid_score, 4),
                 "score": round(self.hybrid_score, 4),
+                "retrieval_profile": self.retrieval_profile,
+                "result_granularity": self.result_granularity,
+                "document_key": self.document_key,
+                "struct_field": self.struct_field,
+                "element_offset": self.element_offset,
+                "parent_rank": self.parent_rank,
+                "retrieval_paths": list(self.retrieval_paths),
+                "fusion_recipe": self.fusion_recipe,
             }
         )
         return data
@@ -329,6 +350,7 @@ class AgentState:
     tool_selection_reasons: dict[str, str] = field(default_factory=dict)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     query_plan: list[dict[str, Any]] = field(default_factory=list)
+    query_transformation: dict[str, Any] = field(default_factory=dict)
     retrieval_provenance: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     rewritten_queries: list[str] = field(default_factory=list)
     query_rewrite_rounds: list[dict[str, Any]] = field(default_factory=list)
@@ -338,7 +360,11 @@ class AgentState:
         default_factory=lambda: {"mode": "current", "doc_versions": []}
     )
     search_mode: str = "hybrid"
+    retrieval_tier: str = "hybrid_dense"
     retrieval_execution_mode: str = "sequential"
+    retrieval_profile: str = "flat_hybrid"
+    structarray_status: str = "disabled"
+    document_candidates: list[dict[str, Any]] = field(default_factory=list)
     search_filters: dict[str, Any] = field(default_factory=dict)
     search_order_by: list[str] = field(default_factory=list)
     milvus_top_k: int = 20
@@ -369,6 +395,9 @@ class AgentState:
     generation_context_count: int = 0
     generation_resolved_entity_count: int = 0
     generation_context_truncated_count: int = 0
+    generation_contexts: list[Any] = field(default_factory=list)
+    generation_citation_map: dict[str, dict[str, Any]] = field(default_factory=dict)
+    context_compression: dict[str, Any] = field(default_factory=dict)
     answer_validation: dict[str, Any] = field(default_factory=dict)
     aggregations: dict[str, dict[str, int]] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)

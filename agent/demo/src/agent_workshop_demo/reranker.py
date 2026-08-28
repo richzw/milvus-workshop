@@ -87,6 +87,14 @@ class Reranker(ABC):
 
     name = "base-reranker"
 
+    #: Score at or above which one chunk may carry a focused answer on its own
+    #: (spec 12 § 5.7). It is declared per implementation because rerank scores
+    #: are not comparable across scorers: `RuleBasedReranker` returns a bounded
+    #: composite of retrieval, overlap, recency and priority, while a model
+    #: reranker returns an assigned relevance. One shared constant would compare
+    #: two different scales.
+    strong_single_evidence_threshold: float = 0.80
+
     @abstractmethod
     def rerank(
         self,

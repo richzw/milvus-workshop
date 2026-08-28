@@ -3,6 +3,10 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from agent_workshop_demo.embedding import (
+    EMBEDDING_FINGERPRINT_KEY,
+    text_embedding_fingerprint,
+)
 from agent_workshop_demo.langgraph_workflow import build_milvus_workflow
 from agent_workshop_demo.schema.pymilvus_adapter import MilvusHybridRetriever
 from agent_workshop_demo.workflow import AgenticRAGWorkflow
@@ -18,6 +22,83 @@ class CollectionClient:
 
     def load_collection(self, *, collection_name: str) -> None:
         self.loaded.append(collection_name)
+
+
+class FingerprintClient:
+    def __init__(self, fingerprints: list[str | None], *, fail: bool = False) -> None:
+        self.fingerprints = fingerprints
+        self.fail = fail
+        self.queries: list[dict[str, object]] = []
+
+    def query(self, **kwargs: object) -> list[dict[str, object]]:
+        self.queries.append(kwargs)
+        if self.fail:
+            raise TimeoutError("milvus unavailable")
+        return [
+            {
+                "chunk_id": f"chunk_{index}",
+                "metadata": (
+                    {} if value is None else {EMBEDDING_FINGERPRINT_KEY: value}
+                ),
+            }
+            for index, value in enumerate(self.fingerprints)
+        ]
+
+
+class EmbeddingSpaceGateTests(unittest.TestCase):
+    def test_matching_fingerprint_passes_the_startup_gate(self) -> None:
+        expected = text_embedding_fingerprint()
+        client = FingerprintClient([expected, expected])
+
+        observed = MilvusHybridRetriever(
+            client,
+            collection_name="workshop_chunks",
+        ).ensure_embedding_space_ready()
+
+        self.assertEqual(observed, expected)
+        self.assertEqual(client.queries[0]["collection_name"], "workshop_chunks")
+        self.assertEqual(client.queries[0]["limit"], 8)
+
+    def test_stale_vector_space_fails_startup(self) -> None:
+        client = FingerprintClient(["openai:text-embedding-3-small:1024"])
+
+        with self.assertRaisesRegex(RuntimeError, "different vector space"):
+            MilvusHybridRetriever(client).ensure_embedding_space_ready()
+
+    def test_mixed_vector_spaces_fail_startup(self) -> None:
+        client = FingerprintClient([text_embedding_fingerprint(), "legacy:512"])
+
+        with self.assertRaisesRegex(RuntimeError, "different vector space"):
+            MilvusHybridRetriever(client).ensure_embedding_space_ready()
+
+    def test_missing_fingerprint_metadata_fails_startup(self) -> None:
+        client = FingerprintClient([None])
+
+        with self.assertRaisesRegex(RuntimeError, "different vector space"):
+            MilvusHybridRetriever(client).ensure_embedding_space_ready()
+
+    def test_empty_collection_is_not_a_mismatch(self) -> None:
+        client = FingerprintClient([])
+
+        observed = MilvusHybridRetriever(client).ensure_embedding_space_ready()
+
+        self.assertEqual(observed, text_embedding_fingerprint())
+
+    def test_query_failure_is_wrapped(self) -> None:
+        client = FingerprintClient([], fail=True)
+
+        with self.assertRaisesRegex(RuntimeError, "Unable to read the stored"):
+            MilvusHybridRetriever(client).ensure_embedding_space_ready()
+
+    def test_sample_size_is_bounded(self) -> None:
+        client = FingerprintClient([text_embedding_fingerprint()])
+
+        for size in (0, 65):
+            with self.subTest(size=size):
+                with self.assertRaises(ValueError):
+                    MilvusHybridRetriever(client).ensure_embedding_space_ready(
+                        sample_size=size,
+                    )
 
 
 class ServerWorkflowTests(unittest.TestCase):
@@ -70,6 +151,7 @@ class ServerWorkflowTests(unittest.TestCase):
             sparse_field="sparse_vector_v2",
         )
         retriever.ensure_collection_ready.assert_called_once_with()
+        retriever.ensure_embedding_space_ready.assert_called_once_with()
         memory_store_class.assert_called_once_with(
             retriever.client,
             collection_name="workshop_memory",
@@ -148,6 +230,43 @@ class ServerWorkflowTests(unittest.TestCase):
                 build_milvus_workflow()
 
         self.assertIsInstance(captured.exception.__cause__, OSError)
+
+    def test_milvus_builder_activates_fingerprint_gated_struct_array(self) -> None:
+        fingerprint = "a" * 64
+        with (
+            patch(
+                "agent_workshop_demo.langgraph_workflow.MilvusHybridRetriever.connect"
+            ) as connect,
+            patch(
+                "agent_workshop_demo.langgraph_workflow.MilvusStructArrayRetriever"
+            ) as struct_class,
+            patch(
+                "agent_workshop_demo.langgraph_workflow.MilvusConversationMemoryStore"
+            ),
+            patch(
+                "agent_workshop_demo.langgraph_workflow."
+                "MilvusGroundedResponseCacheStore"
+            ),
+            patch("agent_workshop_demo.langgraph_workflow.MilvusSelectiveMemoryStore"),
+        ):
+            flat = connect.return_value
+            built = build_milvus_workflow(
+                {
+                    "STRUCT_ARRAY_RETRIEVAL": "struct_element",
+                    "STRUCT_ARRAY_PROJECTION_FINGERPRINT": fingerprint,
+                    "MILVUS_STRUCT_ARRAY_COLLECTION_NAME": "workshop_documents",
+                    "STRUCT_ARRAY_PARENT_TOP_K": "7",
+                }
+            )
+
+        config = struct_class.call_args.args[2]
+        self.assertEqual(config.collection_name, "workshop_documents")
+        self.assertEqual(config.projection_fingerprint, fingerprint)
+        self.assertEqual(config.parent_top_k, 7)
+        struct_class.assert_called_once_with(flat.client, flat, config)
+        struct_class.return_value.ensure_ready.assert_called_once_with()
+        workflow = built if isinstance(built, AgenticRAGWorkflow) else built.workflow
+        self.assertIs(workflow.retriever, struct_class.return_value)
 
     def test_milvus_builder_enables_probe_gated_native_decay(self) -> None:
         with (

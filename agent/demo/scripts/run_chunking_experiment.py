@@ -42,12 +42,19 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=Path("demo/sample_data/mock_s3"),
     )
+    parser.add_argument(
+        "--recommendation",
+        type=Path,
+        default=None,
+        help="Optional reviewed recommendation artifact.",
+    )
     args = parser.parse_args(argv)
     report = run_chunking_experiment(
         configs_path=args.configs,
         anchors_path=args.anchors,
         local_dir=args.local_dir,
         mock_s3_dir=args.mock_s3_dir,
+        recommendation_path=args.recommendation,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
