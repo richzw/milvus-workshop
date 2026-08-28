@@ -1,0 +1,12 @@
+{
+  "schema_version": "rag-eval-review-v1",
+  "reviews": [
+    {
+      "question_id": "q001",
+      "failure_layer": "outcome",
+      "reason_code": "required_fact_missing",
+      "attribution": "scaffold_entanglement",
+      "owner": "workshop-author"
+    }
+  ]
+}

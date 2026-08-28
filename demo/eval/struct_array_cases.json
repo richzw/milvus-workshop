@@ -1,0 +1,33 @@
+{
+  "schema_version": "struct-array-eval-cases-v1",
+  "cases": [
+    {
+      "case_id": "struct_local_s3",
+      "queries": ["S3 文档同步流程如何设计？"],
+      "filters": {"department": "engineering", "is_current": true},
+      "expected_chunk_ids": ["doc_95ea9647a94658f0_c003"]
+    },
+    {
+      "case_id": "struct_multi_aspect_product",
+      "queries": ["客户最关心什么？", "路线图是否覆盖这些问题？"],
+      "filters": {"department": "product", "is_current": true},
+      "expected_chunk_ids": ["doc_9f6e11ae304a092e_c002", "doc_caad368c4a1375e4_c003"]
+    },
+    {
+      "case_id": "struct_exact_version",
+      "queries": ["GO 按钮在 v1 表示什么？"],
+      "filters": {"department": "product", "doc_version": "v1"},
+      "expected_chunk_ids": ["doc_go_button_guide_v1_c001"]
+    },
+    {
+      "case_id": "struct_same_element",
+      "queries": ["Milvus 3.0 StructArray 的检索方式"],
+      "filters": {"department": "engineering", "is_current": true},
+      "element_predicates": [
+        {"field": "record_type", "operator": "eq", "value": "text_chunk"},
+        {"field": "language", "operator": "eq", "value": "en"}
+      ],
+      "expected_chunk_ids": ["doc_milvus_release_notes_v3_0_e93161848c09c7aa_c010"]
+    }
+  ]
+}

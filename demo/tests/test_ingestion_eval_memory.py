@@ -19,7 +19,9 @@ from agent_workshop_demo.ingestion import (
     ingest_demo_sources,
     write_ingestion_result,
 )
+from agent_workshop_demo.knowledge_tools import ALL_DEPARTMENTS, PermissionDecision
 from agent_workshop_demo.memory import ConversationMemoryStore
+from agent_workshop_demo.reranker import build_reranker
 from agent_workshop_demo.workflow import AgenticRAGWorkflow
 
 
@@ -394,12 +396,50 @@ class IngestionEvalMemoryTests(unittest.TestCase):
         )
 
     def test_eval_runner_reports_recall_and_citation_metrics(self) -> None:
-        report = evaluate_questions(
-            questions_path=Path("demo/eval/questions.json"),
-            workflow=AgenticRAGWorkflow(),
+        class ScenarioPermissionChecker:
+            def __init__(self, *, allowed: bool) -> None:
+                self.allowed = allowed
+
+            def check(
+                self,
+                *,
+                session_id: str,
+                intent: str,
+                query_type: str,
+            ) -> PermissionDecision:
+                del session_id, intent, query_type
+                return PermissionDecision(
+                    allowed=self.allowed,
+                    allowed_departments=ALL_DEPARTMENTS if self.allowed else (),
+                    reason="Test fixture permission decision.",
+                    checker_name="test-scenario-permission",
+                )
+
+        questions_path = Path("demo/eval/questions.json")
+        fixture_case_count = len(
+            json.loads(questions_path.read_text(encoding="utf-8"))
         )
 
-        self.assertEqual(report["num_questions"], 7)
+        report = evaluate_questions(
+            questions_path=questions_path,
+            # A scenario factory must honour every declared key; ignoring one
+            # and carrying on is what spec 70 § 3 forbids.
+            scenario_workflow_factory=lambda scenario: AgenticRAGWorkflow(
+                permission_checker=ScenarioPermissionChecker(
+                    allowed=scenario["permission"] == "allow"
+                ),
+                reranker=(
+                    build_reranker({"RERANKER": "auto"})
+                    if scenario.get("reranker") == "fallback"
+                    else None
+                ),
+            ),
+        )
+
+        self.assertEqual(report["report_version"], "rag-eval-v3")
+        self.assertEqual(report["evaluation"]["mode"], "deterministic")
+        # Assert coverage of the committed fixture, not a frozen count.
+        self.assertEqual(report["num_questions"], fixture_case_count)
         self.assertIn("recall_at_k", report)
         self.assertIn("reranked_recall_at_8", report)
         self.assertIn("selected_context_recall_at_5", report)
@@ -411,6 +451,23 @@ class IngestionEvalMemoryTests(unittest.TestCase):
         self.assertEqual(report["tool_selection_accuracy"], 1.0)
         self.assertEqual(report["entity_resolution_accuracy"], 1.0)
         self.assertEqual(report["cross_version_contamination_count"], 0)
+        self.assertEqual(report["permission_denial_case_count"], 1)
+        self.assertEqual(report["permission_bypass_count"], 0)
+        self.assertEqual(
+            report["dimensions"]["trajectory"]["contract_pass_rate"]["value"],
+            1.0,
+        )
+        self.assertIn("goal", report["metric_portfolio"])
+        self.assertIn("guardrail", report["metric_portfolio"])
+        self.assertIn("operational", report["metric_portfolio"])
+        self.assertEqual(
+            report["transcript_review"]["failed_case_ids"],
+            ["q001"],
+        )
+        self.assertEqual(
+            report["cases"][0]["first_failure_layer"],
+            "outcome",
+        )
 
     def test_eval_metrics_use_per_question_denominators(self) -> None:
         class PartialWorkflow:
@@ -418,7 +475,11 @@ class IngestionEvalMemoryTests(unittest.TestCase):
                 self,
                 question: str,
                 filters: dict[str, Any] | None = None,
+                *,
+                session_id: str | None = None,
+                query_id: str | None = None,
             ) -> dict[str, Any]:
+                del question, filters, session_id, query_id
                 return {
                     "milvus_recalled": [{"chunk_id": "expected_1"}],
                     "citations": [
@@ -443,7 +504,7 @@ class IngestionEvalMemoryTests(unittest.TestCase):
             )
             report = evaluate_questions(
                 questions_path=questions_path,
-                workflow=PartialWorkflow(),
+                workflow_factory=PartialWorkflow,
             )
 
         self.assertEqual(report["recall_at_k"], 0.5)

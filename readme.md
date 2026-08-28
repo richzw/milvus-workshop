@@ -28,6 +28,7 @@ Workshop 最终产物是一个具备以下界面的知识问答应用：
   → Execute Tool Plan
   → Candidate Fingerprint / Rerank / Evaluate Evidence
   → Answer，或执行唯一的 Retry Plan，或安全 Abstain
+  → Prepare Generation Context（可选 provenance-safe 压缩）
   → Generate Candidate / Verify Answer
   → Output Gate
   → Validated Streaming
@@ -97,14 +98,36 @@ Milvus-backed 路径组合使用：
 
 本地 CLI 和测试提供 deterministic fallback，不需要 Milvus 或 API key；Streamlit 使用真实 Milvus collection。
 
-### 5. 引用与答案校验
+### 5. 检索复杂度是被评测的选择
+
+默认的 dense + BM25 hybrid 不是"自然而然"的架构，而是一个可以被质疑、也确实被
+测量过的决定。`RETRIEVAL_TIER` 在三级阶梯上选择：
+
+| Tier | 值 | 机制 | 是否需要切块与 embedding |
+| --- | --- | --- | --- |
+| T0 | `lexical_only` | 仅 Milvus BM25 | 否 |
+| T1 | `lexical_rewrite` | T0 加受限 query transformation 与 entity catalog | 否 |
+| T2 | `hybrid_dense` | dense + BM25 再 rerank（**当前默认**） | 是 |
+
+`demo/scripts/run_tier_eval.py` 在同一语料、同一问题集上跑完三个 arm。当前结果是
+T0 通过 8/16，T1 与 T2 都通过 14/16——**全部质量增量来自 T0 → T1，T2 相对 T1 的
+delta 为 0**。因此报告把默认 tier 判定为 `teaching_goal_only`：它由 workshop 的
+Milvus 教学目标支撑，而不是由本语料的质量证据支撑。
+
+这是 Workshop 想传达的一课：T2 以上每一级都附带永久的切块与 re-ingest 义务，升级
+应当由观测到的失败驱动，而不是由架构偏好驱动。完整成本模型见
+[`specs/15-retrieval-tier-selection.md`](./specs/15-retrieval-tier-selection.md)。
+
+### 6. 引用与答案校验
 
 检索到 Top-K 并不代表可以直接回答。生成前后还会执行：
 
 - Evidence coverage 检查，并记录
   `single_strong_chunk | multi_chunk_coverage | insufficient_evidence`；
-- 对 focused、单一命名功能，允许一条 score `≥0.80`、section 直接命中、
-  单工具/单方面、版本匹配且无冲突的 live chunk 回答；
+- 对 focused、单一命名功能，允许一条 live chunk 回答，条件是 section 直接命中、
+  单工具/单方面、版本匹配且无冲突，且 rerank score 达到**实际完成排序的那个
+  reranker 自报的** `strong_single_evidence_threshold`。两个出厂实现都声明
+  `0.80`；不同 reranker 的分数尺度不可比，因此该门槛按实现声明而不是共用常量；
 - Comparison、exhaustive、multi-aspect 和 multi-tool 问题仍要求完整的
   multi-evidence、tool 与 version coverage；
 - 缺失证据使用 `single_weak_chunk`、`single_indirect_chunk`、
@@ -118,7 +141,7 @@ Milvus-backed 路径组合使用：
 
 答案只有通过校验后才会以 `answer_delta` 分块输出。因此当前 streaming 是 **validated-buffered streaming**，不是直接透传未经验证的模型 token。
 
-### 6. 多轮 Agent Memory
+### 7. 多轮 Agent Memory
 
 当前 Memory 由三个边界清晰的部分组成：
 
@@ -162,7 +185,7 @@ Memory tab 将上述状态拆成三个可观察区域：
 - **Complete opaque lineage**：用 event/fact/supersession/parent 的 opaque ids
   展示完整可追溯关系，不渲染被清除的 payload。
 
-### 7. 可观察的 Agent Trace
+### 8. 可观察的 Agent Trace
 
 UI 会动态展示经过脱敏的执行事件，包括：
 
@@ -196,8 +219,21 @@ Workshop 不只是调用一次 vector search，而是用完整数据链路理解
 | Data lifecycle | 安全清理旧 collection、重建 schema、重新导入数据 |
 | Dedup | 生成 checksum 和实验性的 MinHash-style signature |
 | Observability | 将 Milvus recall 与 Rerank、Evidence Grade 分开展示 |
+| Retrieval tier | 用同一 golden set 对照 BM25-only、加转换、hybrid dense 三级，量化 dense lane 的实际增量 |
 
-部分 Milvus 3.0 扩展能力仍属于后续实验，而不是当前 MVP 已验证的能力，例如 External Collection、Snapshot、原生 Entity TTL、服务端 MinHash、EmbList 和 DISKANN。具体边界见 [`specs/93-improvements-review.md`](./specs/93-improvements-review.md)。
+这些能力的成熟度并不一致，readme 不把它们混为一谈：
+
+- **已实现并有 adapter 契约**：BM25 Function 与 SINDI sparse index、`TIMESTAMPTZ`
+  lifecycle TTL、candidate-bounded Query Aggregation、named snapshot restore、
+  dry-run-first schema evolution，以及服务端 MINHASH function/index 定义；
+- **已实现但默认关闭，等待评测收益**：`kb_documents` StructArray 投影与
+  `struct_element / struct_two_stage / struct_fused` 三个 EmbeddingList/element
+  profile。它们在目标 server/SDK 上通过了 probe，但确定性对照未证明质量收益，
+  因此 `STRUCT_ARRAY_RETRIEVAL` 默认仍是 `disabled`；
+- **尚未涉及**：External Collection 与 DISKANN。
+
+仍在排队的兼容性问题（例如当前安装的 pymilvus 未暴露 `FunctionType.MINHASH`）
+记录在 [`specs/93-improvements-review.md`](./specs/93-improvements-review.md)。
 
 ## 新手可以获得什么
 
@@ -243,6 +279,15 @@ Workshop 不只是调用一次 vector search，而是用完整数据链路理解
 
 离线模式不需要 Milvus、OpenAI API key 或对象存储服务，适合新手先理解流程。
 
+一个前提：每个入口都会自动加载 `demo/.env`，真实进程环境变量优先级更高。如果你
+已经在那里配置过 provider，下面的命令就不再是离线的。要强制离线，加上
+`AGENT_WORKSHOP_SKIP_ENV_FILE=1`（测试套件正是这样做的）：
+
+```bash
+AGENT_WORKSHOP_SKIP_ENV_FILE=1 PYTHONPATH=demo/src \
+  python -m agent_workshop_demo.cli "我们 S3 文档同步流程是怎么设计的？"
+```
+
 需要 Python 3.10 或更高版本，推荐 Python 3.11～3.13。
 
 ```bash
@@ -255,29 +300,53 @@ python -m pip install -r demo/requirements.txt
 运行 CLI：
 
 ```bash
-python -m agent_workshop_demo.cli \
+PYTHONPATH=demo/src python -m agent_workshop_demo.cli \
   "我们 S3 文档同步流程是怎么设计的？"
 ```
 
 运行测试：
 
 ```bash
-python -m unittest discover demo/tests -v
+PYTHONPATH=demo/src python -m unittest discover -t demo -s demo/tests -v
 ```
+
+`-t demo` 不能省。它让 `demo/tests` 作为 package 被导入，其 `__init__.py` 会先
+剥离 `demo/.env` 和所有 provider 选择器与凭据。写成 `discover demo/tests` 会平铺
+导入测试模块、跳过这个 hook，使已配置的 provider 把整个套件变成真实网络调用。
 
 运行 Golden QA 评测：
 
 ```bash
-python demo/scripts/run_eval.py
+PYTHONPATH=demo/src python demo/scripts/run_eval.py
+```
+
+报告使用 `eval-metric-registry-v1` 管理 goal、guardrail、operational 三类 active
+metrics，并输出 `rag-eval-v3` decision surface。Golden set 目前有 16 条用例，覆盖
+identity/rewrite/step_back/decompose 四种查询转换、版本隔离与对比、权限拒绝、
+澄清、exhaustive、reranker 降级，以及用 `scenario.prelude` 在同一 session 内预热
+出的 cache hit 与 Memory 状态变更。
+
+验证 registry 或人工 error-analysis artifact：
+
+```bash
+PYTHONPATH=demo/src python -m agent_workshop_demo.eval_governance
+```
+
+其余独立评测各自输出严格 JSON artifact，不改动任何 collection。部分脚本不会自行
+补全 import 路径，统一带上 `PYTHONPATH=demo/src` 最稳妥：
+
+```bash
+PYTHONPATH=demo/src python demo/scripts/run_tier_eval.py             # 检索 tier 对照（T0/T1/T2）
+PYTHONPATH=demo/src python demo/scripts/run_struct_array_eval.py     # StructArray 四 profile 隔离对照
+PYTHONPATH=demo/src python demo/scripts/run_selective_memory_eval.py # Selective Memory 场景集
+PYTHONPATH=demo/src python demo/scripts/run_image_eval.py            # 图片检索 Recall@K + MRR
 ```
 
 运行 Min-Max Chunking 配置对比实验：
 
 ```bash
-OPENAI_API_KEY='' \
-EMBEDDING_PROVIDER=deterministic \
-IMAGE_EMBEDDING_PROVIDER=deterministic \
-python demo/scripts/run_chunking_experiment.py
+AGENT_WORKSHOP_SKIP_ENV_FILE=1 PYTHONPATH=demo/src \
+  python demo/scripts/run_chunking_experiment.py
 ```
 
 ## 运行 Milvus-backed Demo
@@ -299,6 +368,9 @@ MILVUS_MEMORY_EVENTS_COLLECTION_NAME=memory_events
 MILVUS_MEMORY_FACTS_COLLECTION_NAME=memory_facts
 MILVUS_MEMORY_CONSOLIDATION_JOURNAL_COLLECTION_NAME=memory_consolidation_journal
 MILVUS_RESPONSE_CACHE_COLLECTION_NAME=grounded_response_cache
+RETRIEVAL_TIER=hybrid_dense
+STRUCT_ARRAY_RETRIEVAL=disabled
+MILVUS_STRUCT_ARRAY_COLLECTION_NAME=kb_documents
 MEMORY_TOP_K=3
 MEMORY_TTL_SECONDS=86400
 SELECTIVE_MEMORY_ENABLED=true
@@ -394,6 +466,7 @@ Embedding 固定请求 1,024 维以匹配当前 schema。同一个 collection �
 - [`specs/10c-grounded-response-cache.md`](./specs/10c-grounded-response-cache.md)：可验证的回答复用；
 - [`specs/10d-selective-agent-memory.md`](./specs/10d-selective-agent-memory.md)：Selective Memory、decay 与 lineage；
 - [`specs/12-agent-workflow.md`](./specs/12-agent-workflow.md)：共享 transition、检索与 Evidence loop；
+- [`specs/15-retrieval-tier-selection.md`](./specs/15-retrieval-tier-selection.md)：检索复杂度阶梯、成本模型与 embedding 迁移代价；
 - [`specs/13-llm-answer-generation.md`](./specs/13-llm-answer-generation.md)：答案生成与 citation guard；
 - [`specs/70-quality-and-evaluation.md`](./specs/70-quality-and-evaluation.md)：测试和评测标准；
 - [`demo/README.md`](./demo/README.md)：完整运行、配置和故障排查。

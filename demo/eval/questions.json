@@ -3,33 +3,47 @@
     "question_id": "q001",
     "question": "我们 S3 文档同步流程是怎么设计的？",
     "category": "architecture",
+    "expected_terminal_status": "answered",
     "expected_sources": [
       "doc_s3_sync_design_c003",
       "doc_rag_arch_v1_p003_c002"
     ],
-    "expected_tools": ["search_code_docs"]
+    "expected_tools": ["search_code_docs"],
+    "expected_transformation_strategy": "identity",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
   },
   {
     "question_id": "q002",
     "question": "RAG 架构里 Milvus 负责哪一层？",
     "category": "architecture",
+    "expected_terminal_status": "answered",
     "expected_sources": [
       "doc_milvus_feature_map_c001"
     ],
-    "expected_tools": ["search_code_docs"]
+    "expected_tools": ["search_code_docs"],
+    "expected_transformation_strategy": "identity",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
   },
   {
     "question_id": "q003",
     "question": "这个完全不存在的采购审批宇宙飞船编号是什么？",
     "category": "unknown",
+    "expected_terminal_status": "abstained",
+    "expected_stop_reason": "no_progress",
     "expected_sources": [],
     "expected_tools": ["search_code_docs"],
-    "should_abstain": true
+    "should_abstain": true,
+    "expected_transformation_strategy": "rewrite",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
   },
   {
     "question_id": "q004",
     "question": "本季度客户最关心的问题有没有被产品路线图覆盖？",
     "category": "comparison",
+    "expected_terminal_status": "answered",
     "expected_sources": [
       "doc_customer_meeting_notes_c001",
       "doc_product_roadmap_c001"
@@ -37,24 +51,32 @@
     "expected_tools": [
       "search_meeting_notes",
       "search_product_docs"
-    ]
+    ],
+    "expected_transformation_strategy": "identity",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
   },
   {
     "question_id": "q005",
     "question": "领取按钮现在表示什么？",
     "category": "terminology",
+    "expected_terminal_status": "answered",
     "expected_sources": [
       "doc_go_button_guide_v2_c001",
       "doc_go_button_guide_v2_c002"
     ],
     "expected_tools": ["search_product_docs"],
     "expected_entities": ["ui.go_button"],
-    "expected_version_scope": "current"
+    "expected_version_scope": "current",
+    "expected_transformation_strategy": "rewrite",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
   },
   {
     "question_id": "q006",
     "question": "跳转按钮在 v1 表示什么？",
     "category": "terminology",
+    "expected_terminal_status": "answered",
     "expected_sources": [
       "doc_go_button_guide_v1_c001",
       "doc_go_button_guide_v1_c002"
@@ -62,12 +84,16 @@
     "expected_tools": ["search_product_docs"],
     "expected_entities": ["ui.go_button"],
     "expected_version_scope": "exact",
-    "expected_doc_versions": ["v1"]
+    "expected_doc_versions": ["v1"],
+    "expected_transformation_strategy": "rewrite",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
   },
   {
     "question_id": "q007",
     "question": "比较 GO按钮 v1 和 v2 的变化",
     "category": "version_comparison",
+    "expected_terminal_status": "answered",
     "expected_sources": [
       "doc_go_button_guide_v1_c001",
       "doc_go_button_guide_v2_c001"
@@ -75,6 +101,129 @@
     "expected_tools": ["search_product_docs"],
     "expected_entities": ["ui.go_button"],
     "expected_version_scope": "comparison",
-    "expected_doc_versions": ["v1", "v2"]
+    "expected_doc_versions": ["v1", "v2"],
+    "expected_transformation_strategy": "decompose",
+    "expected_query_roles": ["aspect", "aspect"],
+    "expected_plan_item_count": 2
+  },
+  {
+    "question_id": "q008",
+    "question": "请查看产品路线图里的下一季度计划。",
+    "category": "permission_denial",
+    "expected_terminal_status": "permission_denied",
+    "expected_sources": [],
+    "expected_tools": [],
+    "scenario": {
+      "permission": "deny"
+    }
+  },
+  {
+    "question_id": "q009",
+    "question": "S3 文档同步的机制原理是什么？",
+    "category": "architecture",
+    "expected_sources": [
+      "doc_s3_sync_design_c003",
+      "doc_rag_arch_v1_p003_c002"
+    ],
+    "expected_tools": ["search_code_docs"],
+    "expected_version_scope": "current",
+    "expected_transformation_strategy": "step_back",
+    "expected_query_roles": ["background", "primary"],
+    "expected_plan_item_count": 2
+  },
+  {
+    "question_id": "q010",
+    "question": "段位是怎么定义的？",
+    "category": "terminology",
+    "expected_terminal_status": "clarification_required",
+    "expected_sources": [],
+    "expected_tools": []
+  },
+  {
+    "question_id": "q011",
+    "question": "介绍下 Milvus 3.0 Force Merge",
+    "category": "product_version",
+    "expected_sources": [
+      "doc_milvus_feature_map_c002"
+    ],
+    "expected_tools": ["search_code_docs"],
+    "expected_version_scope": "exact",
+    "expected_doc_versions": ["v3.0"],
+    "expected_transformation_strategy": "identity",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
+  },
+  {
+    "question_id": "q012",
+    "question": "Milvus 3.0 有哪些特性？",
+    "category": "exhaustive",
+    "expected_sources": [
+      "doc_milvus_feature_map_c001",
+      "doc_milvus_feature_map_c002"
+    ],
+    "expected_tools": ["search_code_docs"],
+    "expected_version_scope": "exact",
+    "expected_doc_versions": ["v3.0"],
+    "expected_transformation_strategy": "identity",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
+  },
+  {
+    "question_id": "q013",
+    "question": "TTL Memory Policy 是什么？",
+    "category": "policy",
+    "should_abstain": true,
+    "expected_terminal_status": "abstained",
+    "expected_stop_reason": "no_progress",
+    "expected_sources": [],
+    "expected_tools": ["search_policy_docs"],
+    "expected_transformation_strategy": "identity",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
+  },
+  {
+    "question_id": "q014",
+    "question": "RAG 架构里 Milvus 负责哪一层？",
+    "category": "response_cache",
+    "scenario": {
+      "prelude": ["RAG 架构里 Milvus 负责哪一层？"]
+    },
+    "expected_terminal_status": "answered_from_cache",
+    "expected_response_cache_hit": true,
+    "expected_cache_written_count": 0,
+    "expect_tool_calls": false,
+    "expected_sources": [
+      "doc_milvus_feature_map_c001"
+    ],
+    "expected_tools": []
+  },
+  {
+    "question_id": "q015",
+    "question": "你还记得我的偏好吗？",
+    "category": "memory_recall",
+    "scenario": {
+      "prelude": ["请记住我偏好中文回答"]
+    },
+    "expected_terminal_status": "answered_from_memory",
+    "expect_tool_calls": false,
+    "expected_sources": [],
+    "expected_tools": []
+  },
+  {
+    "question_id": "q016",
+    "question": "RAG 架构里 Milvus 负责哪一层？",
+    "category": "reranker_fallback",
+    "scenario": {
+      "reranker": "fallback"
+    },
+    "expected_reranker_fallback": true,
+    "expected_terminal_status": "answered",
+    "expected_sources": [
+      "doc_milvus_feature_map_c001"
+    ],
+    "expected_tools": ["search_code_docs"],
+    "expected_transformation_strategy": "identity",
+    "expected_query_roles": ["primary"],
+    "expected_plan_item_count": 1
   }
 ]

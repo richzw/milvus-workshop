@@ -635,9 +635,9 @@ def _recent_question_count(value: str) -> int:
         return min(MAX_RECENT_QUESTION_COUNT, max(1, requested))
     chinese = RECENT_QUESTION_CHINESE_COUNT_PATTERN.search(value)
     if chinese is not None:
-        requested = _parse_chinese_count(chinese.group("count"))
-        if requested is not None:
-            return min(MAX_RECENT_QUESTION_COUNT, max(1, requested))
+        parsed = _parse_chinese_count(chinese.group("count"))
+        if parsed is not None:
+            return min(MAX_RECENT_QUESTION_COUNT, max(1, parsed))
     return DEFAULT_RECENT_QUESTION_COUNT
 
 

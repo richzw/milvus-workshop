@@ -223,7 +223,7 @@ No hard latency target is claimed until a real Milvus baseline is recorded. Dete
 
 ## 10. Cross-references
 
-- ← Depends on: [`10-data-model.md § conversation_memory`](./10-data-model.md#4-conversation_memory--p2-semantic-memory), [`10a-openai-text-embedding.md`](./10a-openai-text-embedding.md)
+- ← Depends on: [`10-data-model.md § conversation_memory`](./10-data-model.md#4-conversation_memory--session-semantic-memory), [`10a-openai-text-embedding.md`](./10a-openai-text-embedding.md)
 - → Consumed by: [`12-agent-workflow.md`](./12-agent-workflow.md), [`20-ui-demo.md`](./20-ui-demo.md)
 - ↔ Validated by: [`70-quality-and-evaluation.md`](./70-quality-and-evaluation.md)
 - ↔ Decisions: [`99-key-decisions.md § D18`](./99-key-decisions.md#d18--conversation-memory-is-session-scoped-supplementary-context), [`99-key-decisions.md § D30`](./99-key-decisions.md#d30--recent-question-recall-is-a-deterministic-temporal-query)

@@ -65,14 +65,17 @@ class CachedEvidence:
     doc_version: str
     checksum: str
     is_current: bool
+    fusion_recipe: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("chunk_id", "doc_id", "doc_version", "checksum"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
-                raise ValueError(
-                    f"Cached evidence {field_name} must be non-empty"
-                )
+                raise ValueError(f"Cached evidence {field_name} must be non-empty")
+        if self.fusion_recipe is not None and (
+            not self.fusion_recipe.strip() or len(self.fusion_recipe) > 64
+        ):
+            raise ValueError("Cached evidence fusion_recipe is invalid")
 
 
 @dataclass(frozen=True)
@@ -115,14 +118,11 @@ class GroundedResponseCacheRecord:
             raise ValueError("Cached query is empty or too long")
         if not re.fullmatch(r"[0-9a-f]{64}", self.query_hash):
             raise ValueError("Cached query hash must be SHA-256 hex")
-        if (
-            len(self.query_vector) != VECTOR_DIMS["TEXT_DIM"]
-            or any(
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-                for value in self.query_vector
-            )
+        if len(self.query_vector) != VECTOR_DIMS["TEXT_DIM"] or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in self.query_vector
         ):
             raise ValueError("Cached query vector is invalid")
         for value, field_name in (
@@ -171,9 +171,7 @@ class GroundedResponseCacheRecord:
                 or snapshot.doc_id != doc_id
                 or snapshot.doc_version != doc_version
             ):
-                raise ValueError(
-                    "Cached citation does not match evidence identity"
-                )
+                raise ValueError("Cached citation does not match evidence identity")
             citation_ids.add(citation_id)
             cited_chunk_ids.add(chunk_id)
         answer_markers = set(re.findall(r"\[(C\d+)\]", self.answer))
@@ -191,13 +189,14 @@ class GroundedResponseCacheRecord:
             for item in self.entity_ids + self.query_constraints
         ):
             raise ValueError("Cached entity/constraint values are invalid")
-        for value, field_name in (
+        bounded_json_fields: tuple[tuple[Any, str], ...] = (
             (self.version_scope, "version_scope"),
             (self.citations, "citations"),
             ([asdict(item) for item in self.evidence], "evidence"),
             (self.entity_ids, "entity_ids"),
             (self.query_constraints, "query_constraints"),
-        ):
+        )
+        for value, field_name in bounded_json_fields:
             _validate_json_bound(value, field_name=field_name)
 
     def to_storage_dict(self) -> dict[str, Any]:
@@ -320,9 +319,7 @@ class GroundedResponseCacheStore:
         validate_identifier(session_id, field_name="session_id")
         before = len(self.records)
         self.records = [
-            record
-            for record in self.records
-            if record.session_id != session_id
+            record for record in self.records if record.session_id != session_id
         ]
         return before - len(self.records)
 
@@ -365,9 +362,7 @@ class MilvusGroundedResponseCacheStore:
         self.collection_name = collection_name
 
     def ensure_collection_ready(self) -> None:
-        if not self.client.has_collection(
-            collection_name=self.collection_name
-        ):
+        if not self.client.has_collection(collection_name=self.collection_name):
             raise RuntimeError(
                 f"Milvus collection {self.collection_name!r} does not exist; "
                 "run demo/scripts/create_collections.py first."
@@ -391,9 +386,7 @@ class MilvusGroundedResponseCacheStore:
             f"session_id == {json.dumps(session_id)} and "
             f"expires_at > {timestamp_literal(now_ms)}"
         )
-        exact_expression = (
-            f"{expression} and query_hash == {json.dumps(digest)}"
-        )
+        exact_expression = f"{expression} and query_hash == {json.dumps(digest)}"
         try:
             exact_rows = self.client.query(
                 collection_name=self.collection_name,
@@ -408,9 +401,7 @@ class MilvusGroundedResponseCacheStore:
                     session_id=session_id,
                     now_ms=now_ms,
                 )
-                return [
-                    ResponseCacheCandidate(record, 1.0, "exact")
-                ]
+                return [ResponseCacheCandidate(record, 1.0, "exact")]
             hits = self.client.search(
                 collection_name=self.collection_name,
                 data=[dense_vector(normalized)],
@@ -440,9 +431,7 @@ class MilvusGroundedResponseCacheStore:
                 session_id=session_id,
                 now_ms=now_ms,
             )
-            similarity = float(
-                hit.get("distance", hit.get("score", 0.0))
-            )
+            similarity = float(hit.get("distance", hit.get("score", 0.0)))
             candidates.append(
                 ResponseCacheCandidate(
                     record=record,
@@ -516,9 +505,7 @@ def build_cache_record(
 
     normalized = normalize_query(user_query)
     digest = query_hash(user_query)
-    cache_digest = hashlib.sha256(
-        f"{session_id}\0{digest}".encode("utf-8")
-    ).hexdigest()
+    cache_digest = hashlib.sha256(f"{session_id}\0{digest}".encode("utf-8")).hexdigest()
     return GroundedResponseCacheRecord(
         cache_id=f"cache_{cache_digest}",
         session_id=session_id,
@@ -613,9 +600,7 @@ def _record_from_storage(data: dict[str, Any]) -> GroundedResponseCacheRecord:
         or not all(isinstance(item, str) for item in raw_constraints)
         or not isinstance(raw_version_scope, dict)
     ):
-        raise ResponseCacheError(
-            "Grounded response cache record shape is invalid"
-        )
+        raise ResponseCacheError("Grounded response cache record shape is invalid")
     try:
         evidence = [
             CachedEvidence(
@@ -624,6 +609,11 @@ def _record_from_storage(data: dict[str, Any]) -> GroundedResponseCacheRecord:
                 doc_version=_required_string(item, "doc_version"),
                 checksum=_required_string(item, "checksum"),
                 is_current=_required_bool(item, "is_current"),
+                fusion_recipe=(
+                    str(item["fusion_recipe"])
+                    if item.get("fusion_recipe") is not None
+                    else None
+                ),
             )
             for item in raw_evidence
         ]
@@ -643,9 +633,7 @@ def _record_from_storage(data: dict[str, Any]) -> GroundedResponseCacheRecord:
             retrieval_goal=_required_string(data, "retrieval_goal"),
             version_scope=dict(raw_version_scope),
             entity_ids=[str(item) for item in raw_entity_ids],
-            query_constraints=[
-                str(item) for item in raw_constraints
-            ],
+            query_constraints=[str(item) for item in raw_constraints],
             permission_scope_hash=_required_string(
                 data,
                 "permission_scope_hash",

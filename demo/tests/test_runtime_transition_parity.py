@@ -7,6 +7,8 @@ from typing import Any
 from unittest.mock import patch
 
 from agent_workshop_demo.embedding import sparse_vector
+from agent_workshop_demo.context_compression import CompressionRun
+from agent_workshop_demo.generation import GenerationContext
 from agent_workshop_demo.knowledge_tools import PermissionDecision
 from agent_workshop_demo.langgraph_workflow import (
     LangGraphAgenticRAGWorkflow,
@@ -15,6 +17,36 @@ from agent_workshop_demo.models import SearchResult
 from agent_workshop_demo.retrieval import InMemoryHybridRetriever
 from agent_workshop_demo.sample_data import load_kb_chunks
 from agent_workshop_demo.workflow import AgenticRAGWorkflow
+
+
+class _SelectiveCompressor:
+    name = "test-selective"
+
+    def compress(
+        self,
+        query: str,
+        contexts: list[GenerationContext],
+    ) -> CompressionRun:
+        del query
+        projected: list[GenerationContext] = []
+        for context in contexts:
+            quote = context.prompt_text
+            projected.append(
+                replace(
+                    context,
+                    prompt_text=quote,
+                    compression_mode="selective",
+                    support_spans=(
+                        {"start": 0, "end": len(quote), "quote": quote},
+                    ),
+                )
+            )
+        return CompressionRun(
+            contexts=tuple(projected),
+            configured_mode="selective",
+            effective_mode="selective",
+            compressor_name=self.name,
+        )
 
 
 class _CompiledGraph:
@@ -288,6 +320,36 @@ class RuntimeTransitionParityTests(unittest.TestCase):
             local_result[1]["terminal_status"],
             "answered_from_cache",
         )
+
+    def test_enabled_compression_preserves_local_graph_citation_parity(self) -> None:
+        question = "RAG 架构里 Milvus 负责哪一层？"
+        local = AgenticRAGWorkflow(context_compressor=_SelectiveCompressor())
+        graph = _graph(
+            AgenticRAGWorkflow(context_compressor=_SelectiveCompressor())
+        )
+
+        local_response = local.run(
+            question,
+            session_id="session_compression_local",
+            query_id="query_compression_local",
+        )
+        graph_response = graph.run(
+            question,
+            session_id="session_compression_graph",
+            query_id="query_compression_graph",
+        )
+
+        self.assertEqual(
+            [item["chunk_id"] for item in graph_response["citations"]],
+            [item["chunk_id"] for item in local_response["citations"]],
+        )
+        for response in (local_response, graph_response):
+            compression = response["trace"]["context_compression"]
+            self.assertEqual(compression["effective_mode"], "selective")
+            self.assertLessEqual(
+                compression["after_chars"], compression["before_chars"]
+            )
+            self.assertTrue(response["answer_validation"]["valid"])
 
 
 if __name__ == "__main__":

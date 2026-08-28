@@ -8,22 +8,11 @@ from json import loads
 from importlib import import_module
 from typing import Any, Iterable, Literal
 
+from agent_workshop_demo.schema.collections import RETRIEVAL_ANALYZER_PARAMS
+
 FieldKind = Literal["sparse", "embedding"]
 _FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-_RETRIEVAL_ANALYZER = {
-    "tokenizer": "standard",
-    "filter": [
-        "lowercase",
-        {
-            "type": "synonym",
-            "synonyms": [
-                "object storage, s3, minio",
-                "vector database, vector db",
-                "full text, bm25",
-            ],
-        },
-    ],
-}
+_RETRIEVAL_ANALYZER = RETRIEVAL_ANALYZER_PARAMS
 
 
 class MilvusSchemaEvolution:

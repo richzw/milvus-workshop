@@ -1,5 +1,5 @@
 {
-  "schema_version": "chunking-anchors-v1",
+  "schema_version": "chunking-anchors-v2",
   "cases": [
     {
       "case_id": "s3_pipeline_cohesion",
@@ -8,6 +8,7 @@
         "department": "engineering",
         "is_current": true
       },
+      "should_abstain": false,
       "expected_anchors": [
         {
           "source_uri": "s3://internal-agent-chat-demo/engineering/s3_sync_design.md",
@@ -28,6 +29,7 @@
         "department": "engineering",
         "is_current": true
       },
+      "should_abstain": false,
       "expected_anchors": [
         {
           "source_uri": "sample_data/local_docs/engineering/milvus_feature_map.md",
@@ -48,6 +50,7 @@
         "department": "product",
         "is_current": true
       },
+      "should_abstain": false,
       "expected_anchors": [
         {
           "source_uri": "s3://internal-agent-chat-demo/product/customer_meeting_notes.md",
@@ -66,6 +69,16 @@
           ]
         }
       ]
+    },
+    {
+      "case_id": "unknown_request_abstention",
+      "question": "这个完全不存在的采购审批宇宙飞船编号是什么？",
+      "filters": {
+        "department": "engineering",
+        "is_current": true
+      },
+      "should_abstain": true,
+      "expected_anchors": []
     }
   ]
 }

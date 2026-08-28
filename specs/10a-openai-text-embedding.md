@@ -4,7 +4,7 @@ Status: draft · Owner: workshop author · Depends on: [`10-data-model.md`](./10
 
 ## 1. Purpose
 
-Replace the deterministic dense text-vector placeholder with a real OpenAI embedding while preserving the current 1024-dimensional Milvus schema and existing ingestion/retrieval call sites. This component owns text-vector generation and provider configuration. It does not change sparse retrieval, image-vector experiments, chunking, Milvus insertion, or answer generation.
+Replace the deterministic dense text-vector placeholder with a real OpenAI embedding while preserving the current 1024-dimensional Milvus schema and existing ingestion/retrieval call sites. This component owns text-vector generation and provider configuration. It does not change sparse retrieval, the separately specified image-vector provider, chunking, Milvus insertion, or answer generation.
 
 ## 2. Interface and data flow
 
@@ -62,7 +62,11 @@ The adapter requests `dimensions=1024`, matching `VECTOR_DIMS["TEXT_DIM"]`. A mo
 3. Every persisted chunk records `text_embedding_fingerprint=<provider>:<model-or-algorithm>:<dimension>` in the existing JSON metadata; Milvus insert and returned-result validation reject missing or mismatched fingerprints.
 4. Empty text is rejected locally and is never sent to OpenAI.
 5. A configured OpenAI request failure raises a contextual embedding error; it never falls back to deterministic vectors within the same process.
-6. Sparse vectors remain deterministic term-frequency maps; image vectors remain the existing caption-based placeholder.
+6. Sparse vectors remain deterministic term-frequency maps. Image vectors are
+   out of this component's scope entirely: they use the separate 768-dimensional
+   `ImageEmbeddingProvider` fixed by [`11-ingestion.md § Embeddings`](./11-ingestion.md#5-embeddings)
+   and [`99-key-decisions.md § D23`](./99-key-decisions.md#d23--image-embeddings-use-a-fingerprinted-dinov3-vit-b-vector-space);
+   the two vector spaces are never mixed or substituted for each other.
 7. API keys, source text, provider response bodies, and raw provider exception causes are absent from errors and logs.
 
 ## 5. Behaviour and failure policy
@@ -84,7 +88,12 @@ The OpenAI client is cached per process so repeated chunks reuse connection pool
 - Keep the public `dense_vector()` signature and all existing ingestion, retrieval, memory, and Milvus adapter call sites.
 - Centralize provider implementation in `embedding.py`; limit other changes to metadata wiring, validation, and UI resource caching; reuse the already-declared `openai>=2,<3` dependency.
 - Do not alter `KBChunk`, collection definitions, indexes, or stored dimensions; use its existing JSON metadata for the fingerprint.
-- Keep `image_vector()` on the deterministic placeholder until a separate multimodal embedding spec is approved.
+- Do not touch the image path from this seam. `image_vector` is owned by the
+  explicit `IMAGE_EMBEDDING_PROVIDER=deterministic|dinov3` contract in
+  [`11-ingestion.md § Embeddings`](./11-ingestion.md#5-embeddings); its offline mode hashes validated
+  image bytes, never a caption, and it carries its own
+  `metadata.image_embedding_fingerprint`.
+- A provider or model change is therefore a full corpus re-ingest. Its cost model, rebuild window and the fingerprint startup gate are recorded in [`15-retrieval-tier-selection.md § 7`](./15-retrieval-tier-selection.md#7-embedding-model-lifecycle); no change ships without that migration plan.
 
 ## 7. Tests and acceptance
 
@@ -107,4 +116,4 @@ The OpenAI client is cached per process so repeated chunks reuse connection pool
 - ← Depends on: [`10-data-model.md § kb_chunks`](./10-data-model.md#3-kb_chunks--authoritative-knowledge-records)
 - → Consumed by: [`11-ingestion.md`](./11-ingestion.md), [`12-agent-workflow.md`](./12-agent-workflow.md)
 - ↔ Evaluated by: [`70-quality-and-evaluation.md`](./70-quality-and-evaluation.md)
-- ↔ Decision: [`99-key-decisions.md § D12`](./99-key-decisions.md#d12--openai-text-embedding-preserves-the-existing-vector-contract)
+- ↔ Decisions: [`99-key-decisions.md § D12`](./99-key-decisions.md#d12--openai-text-embedding-preserves-the-existing-vector-contract), [`99-key-decisions.md § D51`](./99-key-decisions.md#d51--embedding-model-migration-is-planned-and-fingerprint-gated)

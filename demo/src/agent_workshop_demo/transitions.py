@@ -19,6 +19,7 @@ class WorkflowNode(str, Enum):
     EXECUTE_TOOL_PLAN = "execute_tool_plan"
     RERANK_EVIDENCE = "rerank_evidence"
     EVALUATE_EVIDENCE = "evaluate_evidence"
+    PREPARE_GENERATION_CONTEXT = "prepare_generation_context"
     GENERATE_CANDIDATE_ANSWER = "generate_candidate_answer"
     OUTPUT_GATE = "output_gate"
 
@@ -38,6 +39,7 @@ class TransitionReason(str, Enum):
     EVIDENCE_PROGRESS = "evidence_progress"
     SUPPLEMENTARY_RETRY = "supplementary_retry"
     EVIDENCE_TERMINAL = "evidence_terminal"
+    EVIDENCE_READY_FOR_CONTEXT = "evidence_ready_for_context"
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,10 @@ def next_transition(
         if evidence_action is EvidenceAction.ANSWER:
             if not state.enough_evidence or state.terminal_status != "answered":
                 raise ValueError("answer action requires sufficient evidence")
+            return WorkflowTransition(
+                WorkflowNode.PREPARE_GENERATION_CONTEXT,
+                TransitionReason.EVIDENCE_READY_FOR_CONTEXT,
+            )
         elif state.enough_evidence or state.terminal_status != "abstained":
             raise ValueError("abstain action requires insufficient evidence")
         return WorkflowTransition(

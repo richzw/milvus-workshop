@@ -10,6 +10,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SOURCE_ROOT) not in sys.path:
@@ -59,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Explicit legacy sparse override; default uses Milvus 3 SINDI.",
     )
     args = parser.parse_args(argv)
-    definitions = {
+    definitions: dict[str, dict[str, Any]] = {
         "kb_chunks": KB_CHUNKS_INDEXES,
         "conversation_memory": CONVERSATION_MEMORY_INDEXES,
         "memory_events": MEMORY_EVENTS_INDEXES,

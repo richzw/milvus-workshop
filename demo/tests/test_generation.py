@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
 from agent_workshop_demo.generation import (
+    AnswerGenerationError,
     DeterministicAnswerGenerator,
     FallbackAnswerGenerator,
     GenerationContext,
     GenerationRequest,
     OpenAIAnswerGenerator,
     build_answer_generator,
+    validate_generation_result,
 )
 
 
@@ -94,6 +97,44 @@ class GenerationTests(unittest.TestCase):
         self.assertIn("写入 Milvus", result.text)
         self.assertIn("[C1]", result.text)
         self.assertIn("[C2]", result.text)
+
+    def test_derived_projection_grounds_generation_on_exact_support(self) -> None:
+        context = GenerationContext(
+            citation_id="C1",
+            chunk_id="chunk_1",
+            doc_id="doc_sync",
+            doc_version="v2",
+            title="同步设计",
+            page_no=None,
+            section="Pipeline",
+            prompt_text="派生摘要声称存在未经支持的自动删除。",
+            compression_mode="summary",
+            support_spans=(
+                {"start": 0, "end": 8, "quote": "扫描对象存储。"},
+            ),
+            source_text_checksum="checksum",
+        )
+        request = GenerationRequest(
+            query_id="query_projection",
+            user_query="同步流程如何工作？",
+            resolved_entities=[],
+            version_scope={"mode": "current"},
+            contexts=[context],
+        )
+
+        deterministic = DeterministicAnswerGenerator().generate(request)
+        self.assertIn("扫描对象存储", deterministic.text)
+        self.assertNotIn("自动删除", deterministic.text)
+
+        client = RecordingOpenAIClient("流程会扫描对象存储。[C1]")
+        OpenAIAnswerGenerator(client=client, model="configured-model").generate(
+            request
+        )
+        provider_input = client.responses.calls[0]["input"]
+        self.assertIn("omitted_non_authoritative=\"true\"", provider_input)
+        self.assertIn("authoritative_exact_support", provider_input)
+        self.assertIn("扫描对象存储", provider_input)
+        self.assertNotIn("自动删除", provider_input)
 
     def test_openai_generator_synthesizes_valid_cited_answer(self) -> None:
         client = RecordingOpenAIClient(
@@ -181,6 +222,32 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(result.generator_name, "deterministic")
         self.assertEqual(result.fallback_reason, "timeout")
         self.assertNotIn("secret provider body", repr(result))
+
+    def test_injected_generator_cannot_trace_an_unregistered_reason(self) -> None:
+        """Spec 13 § 6 closes the reason set; a provider body must not reach trace."""
+
+        request = self.generation_request()
+        result = DeterministicAnswerGenerator().generate(request)
+        leaked = replace(
+            result,
+            fallback_reason="Connection refused by api.example.com",
+        )
+
+        with self.assertRaises(AnswerGenerationError) as caught:
+            validate_generation_result(leaked, list(request.contexts))
+
+        self.assertEqual(caught.exception.reason_code, "invalid_model_output")
+
+    def test_registered_generation_reason_passes_validation(self) -> None:
+        request = self.generation_request()
+        result = replace(
+            DeterministicAnswerGenerator().generate(request),
+            fallback_reason="rate_limited",
+        )
+
+        validated = validate_generation_result(result, list(request.contexts))
+
+        self.assertEqual(validated.fallback_reason, "rate_limited")
 
     def test_auto_mode_without_credentials_uses_offline_fallback(self) -> None:
         generator = build_answer_generator({"ANSWER_GENERATOR": "auto"})

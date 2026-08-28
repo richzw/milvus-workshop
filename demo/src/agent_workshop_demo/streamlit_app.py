@@ -152,6 +152,8 @@ def build_selective_memory_dashboard(
         "lineage_truncated_count": truncated,
         "record_truncated_count": max(0, len(records) - MAX_MEMORY_DASHBOARD_ROWS),
     }
+
+
 MARKDOWN_ENTITY_ESCAPES = str.maketrans(
     {
         "\\": "&#92;",
@@ -334,8 +336,20 @@ def main() -> None:
         reranker_timeout_seconds: str,
         answer_mode: str,
         answer_model: str,
+        query_transformer_mode: str,
+        query_transformer_model: str,
+        query_transformer_timeout_seconds: str,
+        context_compression_mode: str,
+        context_compression_trigger_chars: str,
+        context_compression_max_output_chars: str,
+        context_compressor_model: str,
+        context_compressor_timeout_seconds: str,
         milvus_uri: str,
         milvus_collection_name: str,
+        struct_array_retrieval: str,
+        struct_array_collection_name: str,
+        struct_array_projection_fingerprint: str,
+        struct_array_parent_top_k: str,
         milvus_memory_collection_name: str,
         milvus_memory_events_collection_name: str,
         milvus_memory_facts_collection_name: str,
@@ -360,8 +374,20 @@ def main() -> None:
         os.getenv("OPENAI_RERANKER_TIMEOUT_SECONDS", "10"),
         os.getenv("ANSWER_GENERATOR", "auto"),
         os.getenv("OPENAI_MODEL", ""),
+        os.getenv("QUERY_TRANSFORMER", "rule_based"),
+        os.getenv("OPENAI_QUERY_TRANSFORMER_MODEL", ""),
+        os.getenv("OPENAI_QUERY_TRANSFORMER_TIMEOUT_SECONDS", "10"),
+        os.getenv("CONTEXT_COMPRESSION_MODE", "disabled"),
+        os.getenv("CONTEXT_COMPRESSION_TRIGGER_CHARS", "12000"),
+        os.getenv("CONTEXT_COMPRESSION_MAX_OUTPUT_CHARS", "12000"),
+        os.getenv("OPENAI_CONTEXT_COMPRESSOR_MODEL", ""),
+        os.getenv("OPENAI_CONTEXT_COMPRESSOR_TIMEOUT_SECONDS", "15"),
         os.getenv("MILVUS_URI", "http://localhost:19530"),
         os.getenv("MILVUS_COLLECTION_NAME", "kb_chunks"),
+        os.getenv("STRUCT_ARRAY_RETRIEVAL", "disabled"),
+        os.getenv("MILVUS_STRUCT_ARRAY_COLLECTION_NAME", "kb_documents"),
+        os.getenv("STRUCT_ARRAY_PROJECTION_FINGERPRINT", ""),
+        os.getenv("STRUCT_ARRAY_PARENT_TOP_K", "8"),
         os.getenv(
             "MILVUS_MEMORY_COLLECTION_NAME",
             "conversation_memory",
@@ -566,6 +592,9 @@ def main() -> None:
                         ),
                         "rank": item["rank"],
                         "hybrid_score": item["hybrid_score"],
+                        "profile": item["retrieval_profile"],
+                        "granularity": item["result_granularity"],
+                        "offset": item["element_offset"],
                         "source": item["title"],
                         "chunk": item["chunk_id"],
                         "version": item["doc_version"],
@@ -576,6 +605,15 @@ def main() -> None:
                 ],
                 use_container_width=True,
             )
+            if response.get("document_candidates"):
+                st.subheader("Document Shortlist (routing only)")
+                st.caption(
+                    "Parent matches route the second stage and are not citations."
+                )
+                st.dataframe(
+                    response["document_candidates"],
+                    use_container_width=True,
+                )
         st.subheader("Evidence Coverage")
         st.json(response["trace"]["evidence_grading"])
         with right:

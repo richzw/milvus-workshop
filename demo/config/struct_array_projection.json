@@ -1,0 +1,17 @@
+{
+  "schema_version": "struct-array-projection-v1",
+  "selected_doc_ids": [
+    "doc_29ade9cae7e2ec87",
+    "doc_2d1239bf30b9d89b",
+    "doc_7f47b2bdba5041fe",
+    "doc_95ea9647a94658f0",
+    "doc_9f6e11ae304a092e",
+    "doc_a32155e77e87f4ec",
+    "doc_caad368c4a1375e4",
+    "doc_fe2020f548a21611",
+    "doc_go_button_guide",
+    "doc_milvus_release_notes",
+    "doc_rag_arch"
+  ],
+  "rationale": "Long or multi-passage workshop documents selected for parent/passage retrieval; single-image records stay on flat hybrid search."
+}

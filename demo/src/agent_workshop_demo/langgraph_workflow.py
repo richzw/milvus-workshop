@@ -9,8 +9,21 @@ from importlib import import_module
 from typing import Any, Protocol, cast
 
 from agent_workshop_demo.classification import build_query_classifier
+from agent_workshop_demo.context_compression import (
+    ContextCompressor,
+    build_context_compressor,
+)
 from agent_workshop_demo.generation import build_answer_generator
+from agent_workshop_demo.knowledge_tools import PermissionChecker
+from agent_workshop_demo.query_transform import (
+    QueryTransformer,
+    build_query_transformer,
+)
 from agent_workshop_demo.reranker import build_reranker
+from agent_workshop_demo.retrieval_tier import (
+    RetrievalTierConfig,
+    runtime_config_from_mapping as retrieval_tier_config_from_mapping,
+)
 from agent_workshop_demo.events import WorkflowEventEmitter
 from agent_workshop_demo.memory import (
     ConversationMemory,
@@ -33,6 +46,11 @@ from agent_workshop_demo.selective_memory import (
 )
 from agent_workshop_demo.retrieval import HybridRetriever
 from agent_workshop_demo.schema.pymilvus_adapter import MilvusHybridRetriever
+from agent_workshop_demo.struct_array import (
+    MilvusStructArrayRetriever,
+    StructArrayProfile,
+    runtime_config_from_mapping,
+)
 from agent_workshop_demo.transitions import (
     WorkflowNode,
     next_transition,
@@ -361,6 +379,17 @@ class LangGraphAgenticRAGWorkflow:
             payload["answer_chunks"] = chunks
             return payload
 
+        def prepare_generation_context(
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
+            state = payload["state"]
+            self.workflow._measure_stage(
+                state,
+                "prepare_generation_context",
+                lambda: self.workflow.prepare_generation_context(state),
+            )
+            return payload
+
         def verify(payload: dict[str, Any]) -> dict[str, Any]:
             state = payload["state"]
             self.workflow._measure_stage(
@@ -449,6 +478,10 @@ class LangGraphAgenticRAGWorkflow:
         graph.add_node("execute_tool_plan", retrieve)
         graph.add_node("rerank_evidence", rerank)
         graph.add_node("evaluate_evidence", evaluate_evidence)
+        graph.add_node(
+            "prepare_generation_context",
+            prepare_generation_context,
+        )
         graph.add_node("generate_answer_streaming", answer)
         graph.add_node("verify_answer", verify)
         graph.add_node("answer_ready", answer_ready)
@@ -484,9 +517,7 @@ class LangGraphAgenticRAGWorkflow:
             "try_grounded_cache",
             after_cache_validation,
             {
-                "recall_authorized_experience": (
-                    "recall_authorized_experience"
-                ),
+                "recall_authorized_experience": ("recall_authorized_experience"),
                 "output_gate": "answer_ready",
             },
         )
@@ -506,8 +537,13 @@ class LangGraphAgenticRAGWorkflow:
             after_evaluate_evidence,
             {
                 "execute_tool_plan": "execute_tool_plan",
+                "prepare_generation_context": "prepare_generation_context",
                 "generate_candidate_answer": "generate_answer_streaming",
             },
+        )
+        graph.add_edge(
+            "prepare_generation_context",
+            "generate_answer_streaming",
         )
         graph.add_edge("generate_answer_streaming", "verify_answer")
         graph.add_edge("verify_answer", "answer_ready")
@@ -517,9 +553,23 @@ class LangGraphAgenticRAGWorkflow:
         return cast(CompiledGraph, graph.compile())
 
 
+def _configured_retrieval_tier(
+    environ: Mapping[str, str] | None,
+) -> RetrievalTierConfig:
+    """Resolve the spec 15 retrieval tier from explicit configuration."""
+
+    return retrieval_tier_config_from_mapping(
+        os.environ if environ is None else environ
+    )
+
+
 def build_default_workflow(
     *,
+    environ: Mapping[str, str] | None = None,
     retriever: HybridRetriever | None = None,
+    query_transformer: QueryTransformer | None = None,
+    context_compressor: ContextCompressor | None = None,
+    permission_checker: PermissionChecker | None = None,
     memory_store: ConversationMemory | None = None,
     memory_top_k: int = DEFAULT_MEMORY_TOP_K,
     memory_ttl_seconds: int = DEFAULT_MEMORY_TTL_SECONDS,
@@ -536,6 +586,7 @@ def build_default_workflow(
 ) -> AgenticRAGWorkflow | LangGraphAgenticRAGWorkflow:
     """Build configured generation and prefer LangGraph orchestration."""
 
+    tier = _configured_retrieval_tier(environ)
     configured_selective_memory = (
         selective_memory
         if selective_memory is not None
@@ -545,9 +596,24 @@ def build_default_workflow(
     )
     workflow = AgenticRAGWorkflow(
         retriever=retriever,
-        reranker=build_reranker(),
-        query_classifier=build_query_classifier(),
-        answer_generator=build_answer_generator(),
+        reranker=build_reranker(environ),
+        query_classifier=build_query_classifier(environ),
+        query_transformer=(
+            None
+            if not tier.uses_query_transformation
+            else (
+                query_transformer
+                if query_transformer is not None
+                else build_query_transformer(environ)
+            )
+        ),
+        answer_generator=build_answer_generator(environ),
+        context_compressor=(
+            context_compressor
+            if context_compressor is not None
+            else build_context_compressor(environ)
+        ),
+        permission_checker=permission_checker,
         memory_store=memory_store,
         memory_top_k=memory_top_k,
         memory_ttl_seconds=memory_ttl_seconds,
@@ -559,6 +625,7 @@ def build_default_workflow(
         response_cache_ttl_seconds=response_cache_ttl_seconds,
         response_cache_similarity_threshold=(response_cache_similarity_threshold),
         kb_revision=kb_revision,
+        retrieval_tier=tier.tier,
     )
     try:
         return LangGraphAgenticRAGWorkflow(workflow)
@@ -572,6 +639,7 @@ def build_milvus_workflow(
     """Build the Streamlit workflow backed by a loaded Milvus collection."""
 
     values = os.environ if environ is None else environ
+    struct_array_config = runtime_config_from_mapping(values)
     uri = values.get("MILVUS_URI", "http://localhost:19530").strip()
     if not uri:
         raise ValueError("MILVUS_URI must be non-empty")
@@ -707,20 +775,31 @@ def build_milvus_workflow(
         raise ValueError("KB_REVISION must contain 1..128 characters")
 
     try:
-        retriever = MilvusHybridRetriever.connect(
+        flat_retriever = MilvusHybridRetriever.connect(
             uri,
             token,
             collection_name=collection_name,
             sparse_field=sparse_field,
         )
-        retriever.ensure_collection_ready()
+        flat_retriever.ensure_collection_ready()
+        flat_retriever.ensure_embedding_space_ready()
+        if struct_array_config.profile is StructArrayProfile.DISABLED:
+            retriever: HybridRetriever = flat_retriever
+        else:
+            struct_retriever = MilvusStructArrayRetriever(
+                flat_retriever.client,
+                flat_retriever,
+                struct_array_config,
+            )
+            struct_retriever.ensure_ready()
+            retriever = struct_retriever
         memory_store = MilvusConversationMemoryStore(
-            retriever.client,
+            flat_retriever.client,
             collection_name=memory_collection_name,
         )
         memory_store.ensure_collection_ready()
         selective_memory_store = MilvusSelectiveMemoryStore(
-            retriever.client,
+            flat_retriever.client,
             events_collection_name=memory_events_collection_name,
             facts_collection_name=memory_facts_collection_name,
             journal_collection_name=memory_journal_collection_name,
@@ -738,7 +817,7 @@ def build_milvus_workflow(
             recurrence_threshold=memory_recurrence_threshold,
         )
         response_cache = MilvusGroundedResponseCacheStore(
-            retriever.client,
+            flat_retriever.client,
             collection_name=response_cache_collection_name,
         )
         if response_cache_enabled:
@@ -751,6 +830,7 @@ def build_milvus_workflow(
             f"{collection_name!r} from MILVUS_URI"
         ) from exc
     return build_default_workflow(
+        environ=values,
         retriever=retriever,
         memory_store=memory_store,
         memory_top_k=memory_top_k,
